@@ -92,7 +92,7 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
         uid = int(data['user_id'])
         vc._add_ssrc(uid, data['audio_ssrc'])
         member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
-            streams = VoiceVideoStreams(data=cast('VoiceVideoPayload', data), vc=vc)
+        streams = VoiceVideoStreams(data=cast('VoiceVideoPayload', data), vc=vc)
         vc.dispatch("voice_member_video", member, streams, )
 
     elif op == CLIENT_DISCONNECT:
