@@ -63,9 +63,7 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
             log.info("WS payload has extra keys: %s", m)
 
     if op == self.READY:
-        # Check if guild exists, use bot.user.id if in a DM
-        user_id = vc.guild.me.id if vc.guild else self.client.user.id  # type: ignore  # vc.client is actually bot, but its not properly typed
-        vc._add_ssrc(user_id, data['ssrc'])
+        vc._add_ssrc(vc.user.id, data['ssrc'])
 
     elif op == self.SESSION_DESCRIPTION:
         if vc._reader:
