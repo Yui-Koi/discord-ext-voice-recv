@@ -311,7 +311,9 @@ class SpeakingTimer(threading.Thread):
 
     def _lookup_member(self, ssrc: int) -> Optional[Member]:
         whoid = self.voice_client._get_id_from_ssrc(ssrc)
-        return self.voice_client.guild.get_member(whoid) if whoid else None
+        if not whoid: return None
+        entity = self.voice_client.guild.get_member(whoid) if self.voice_client.guild else self.voice_client.get_user(whoid)
+        return entity
 
     def maybe_dispatch_speaking_start(self, ssrc: int) -> None:
         tlast = self.speaking_cache.get(ssrc)

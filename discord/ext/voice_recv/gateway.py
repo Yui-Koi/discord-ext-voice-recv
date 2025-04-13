@@ -29,7 +29,7 @@ READY                     = 2
 HEARTBEAT                 = 3
 SESSION_DESCRIPTION       = 4  # (aka SELECT_PROTOCOL_ACK)
 SPEAKING                  = 5
-HEARTBEAT                 = 6
+HEARTBEAT_ACK             = 6
 RESUME                    = 7
 HELLO                     = 8
 RESUMED                   = 9
@@ -76,7 +76,7 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
         uid = int(data['user_id'])
         ssrc = data['ssrc']
         vc._add_ssrc(uid, ssrc)
-        member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+        member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
         state = try_enum(SpeakingState, data['speaking'])
         vc.dispatch("voice_member_speaking_state", member, ssrc, state)
 
@@ -85,13 +85,13 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
 
         # Multiple user IDs means this is the initial member list
         for uid in uids:
-            member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+            member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
             vc.dispatch("voice_member_connect", member)
 
     elif op == VIDEO:
         uid = int(data['user_id'])
         vc._add_ssrc(uid, data['audio_ssrc'])
-        member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+        member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
         streams = VoiceVideoStreams(data=cast('VoiceVideoPayload', data), vc=vc)
         vc.dispatch("voice_member_video", member, streams, )
 
@@ -104,15 +104,15 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
             vc._reader.packet_router.destroy_decoder(ssrc)
 
         vc._remove_ssrc(user_id=uid)
-        member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+        member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
         vc.dispatch("voice_member_disconnect", member, ssrc)
 
     elif op == FLAGS:
         uid = int(data['user_id'])
-        member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+        member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
         vc.dispatch("voice_member_flags", member, VoiceFlags._from_value(data['flags'] or 0))
 
     elif op == PLATFORM:
         uid = int(data['user_id'])
-        member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+        member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
         vc.dispatch("voice_member_platform", member, try_enum(VoicePlatform, data['platform']) if data['platform'] is not None else None)
