@@ -61,7 +61,7 @@ class VoiceRecvClient(discord.VoiceClient):
         # if we joined, left, or switched channels, reset the decoders
         if self._reader and channel_id != old_channel_id:
             guild_id = f"Guild ({self.guild.id})" if self.guild else f"DM/Group ({self.channel.id})"
-            log.debug("Destroying all decoders in %s", self.guild.id)
+            log.debug("Destroying all decoders in %s", guild_id)
             self._reader.packet_router.destroy_all_decoders()
 
     def add_listener(self, func: CoroFunc, *, name: str = MISSING) -> None:
