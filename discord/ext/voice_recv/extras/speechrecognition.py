@@ -149,7 +149,7 @@ else:
             return cb
 
         @AudioSink.listener()
-        def on_voice_member_disconnect(self, member: Member, ssrc: Optional[int]) -> None:
+        def on_voice_member_disconnect(self, member: Union[discord.Member, discord.User], ssrc: Optional[int]) -> None:
             if member is not None:
                 self._drop(member.id)
 
