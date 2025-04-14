@@ -626,7 +626,7 @@ class SilenceGeneratorSink(AudioSink):
         self.destination.write(user, data)
 
     @AudioSink.listener()
-    def on_voice_member_disconnect(self, member: discord.Member, ssrc: Optional[int]) -> None:
+    def on_voice_member_disconnect(self, member: Union[discord.User, discord.Member], ssrc: Optional[int]) -> None:
         self.silencegen.drop(ssrc=ssrc, user=member)
 
     def cleanup(self) -> None:
