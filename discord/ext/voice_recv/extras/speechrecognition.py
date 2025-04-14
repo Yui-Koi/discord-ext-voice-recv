@@ -30,7 +30,7 @@ else:
 
     from ..rtp import SilencePacket
 
-    from typing import TYPE_CHECKING, TypedDict
+    from typing import TYPE_CHECKING, TypedDict, Union
 
     if TYPE_CHECKING:
         from concurrent.futures import Future as CFuture

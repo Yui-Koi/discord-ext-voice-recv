@@ -5,7 +5,7 @@ from discord.ext import commands, voice_recv
 
 discord.opus._load_default()
 
-bot = commands.Bot(command_prefix=commands.when_mentioned, intents=discord.Intents.all())
+bot = commands.Bot(command_prefix=commands.when_mentioned, self_bot=True)
 
 class Testing(commands.Cog):
     def __init__(self, bot):
@@ -38,10 +38,9 @@ class Testing(commands.Cog):
 @bot.event
 async def on_ready():
     print('Logged in as {0.id}/{0}'.format(bot.user))
-    print('------')
 
 @bot.event
 async def setup_hook():
     await bot.add_cog(Testing(bot))
 
-bot.run("token")
+bot.run("TOKEN")
