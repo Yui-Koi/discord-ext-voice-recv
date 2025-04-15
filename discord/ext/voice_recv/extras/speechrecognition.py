@@ -34,7 +34,7 @@ else:
 
     if TYPE_CHECKING:
         from concurrent.futures import Future as CFuture
-        from typing import Literal, Callable, Optional, Any, Final, Protocol, Awaitable, TypeVar
+        from typing import Literal, Callable, Optional, Any, Final, Union, Protocol, Awaitable, TypeVar
 
         from discord import Member
 
