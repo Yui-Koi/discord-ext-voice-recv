@@ -1,0 +1,11 @@
+/app/discord/ext/voice_recv/voice_client.py
+  /app/discord/ext/voice_recv/voice_client.py:39:86 - warning: Unnecessary "# type: ignore" comment (reportUnnecessaryTypeIgnoreComment)
+  /app/discord/ext/voice_recv/voice_client.py:40:34 - error: Argument of type "Connectable" cannot be assigned to parameter "channel" of type "VocalChannel" in function "__init__"
+    Type "Connectable" is not assignable to type "VocalChannel"
+      "Connectable" is not assignable to "VoiceChannel"
+      "Connectable" is not assignable to "StageChannel"
+      "Connectable" is not assignable to "DMChannel"
+      "Connectable" is not assignable to "GroupChannel" (reportArgumentType)
+/home/jules/.local/lib/python3.10/site-packages/pyright/dist/dist/typeshed-fallback/stdlib/_typeshed/_type_checker_internals.pyi
+  /home/jules/.local/lib/python3.10/site-packages/pyright/dist/dist/typeshed-fallback/stdlib/_typeshed/_type_checker_internals.pyi:52:91 - warning: Unnecessary "# type: ignore" comment (reportUnnecessaryTypeIgnoreComment)
+1 error, 2 warnings, 0 informations

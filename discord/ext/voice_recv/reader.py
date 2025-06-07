@@ -20,9 +20,9 @@ except ImportError as e:
     raise RuntimeError("pynacl is required") from e
 
 if TYPE_CHECKING:
-    from typing import Optional, Callable, Any, Dict, Literal, Union
+    from typing import Optional, Callable, Any, Dict, Literal, Union, cast
 
-    from discord import Member
+    from discord import Member, User # Added User
     from discord.types.voice import SupportedModes
     from .voice_client import VoiceRecvClient
     from .rtp import RTPPacket
@@ -56,7 +56,7 @@ class AudioReader:
         self.error: Optional[Exception] = None
         self.packet_router: PacketRouter = PacketRouter(sink, self)
         self.event_router: SinkEventRouter = SinkEventRouter(sink, self)
-        self.decryptor: PacketDecryptor = PacketDecryptor(voice_client.mode, bytes(voice_client.secret_key))
+        self.decryptor: PacketDecryptor = PacketDecryptor(cast(SupportedModes, voice_client.mode), bytes(voice_client.secret_key))
         self.speaking_timer: SpeakingTimer = SpeakingTimer(self)
         self.keepalive: UDPKeepAlive = UDPKeepAlive(voice_client)
 
@@ -187,7 +187,7 @@ class AudioReader:
 
 
 class PacketDecryptor:
-    supported_modes: list[SupportedModes] = [
+    supported_modes: list[str] = [
         'aead_xchacha20_poly1305_rtpsize',
         'xsalsa20_poly1305_lite',
         'xsalsa20_poly1305_suffix',
@@ -309,7 +309,7 @@ class SpeakingTimer(threading.Thread):
         self.speaking_timer_event: threading.Event = threading.Event()
         self._end_thread: threading.Event = threading.Event()
 
-    def _lookup_member(self, ssrc: int) -> Optional[Member]:
+    def _lookup_member(self, ssrc: int) -> Optional[Union[Member, User]]: # Changed return type
         whoid = self.voice_client._get_id_from_ssrc(ssrc)
         if not whoid: return None
         vc = self.voice_client

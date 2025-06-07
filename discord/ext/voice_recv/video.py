@@ -28,7 +28,7 @@ class VoiceVideoStreams:
     def __init__(self, *, data: VoiceVideoPayload, vc: VoiceRecvClient):
         self.audio_ssrc = data['audio_ssrc']
         self.video_ssrc = data['video_ssrc']
-        self.member = vc.guild.get_member(int(data['user_id']))
+        self.member = vc.guild.get_member(int(data['user_id'])) if vc.guild else None
         self.streams = self._get_streams(data['streams'])
 
     def __repr__(self) -> str:

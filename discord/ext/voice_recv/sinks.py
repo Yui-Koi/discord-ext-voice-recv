@@ -387,7 +387,7 @@ class FFmpegSink(AudioSink):
             '-ac', '2',
             '-i', 'pipe:0',
             '-loglevel', 'warning',
-            '-blocksize', str(discord.FFmpegAudio.BLOCKSIZE)
+            '-blocksize', str(discord.FFmpegAudio.BLOCKSIZE) # type: ignore
         ))
         # fmt: on
 
@@ -493,7 +493,7 @@ class FFmpegSink(AudioSink):
             if source.closed:
                 return
             try:
-                data = source.read(discord.FFmpegAudio.BLOCKSIZE)
+                data = source.read(discord.FFmpegAudio.BLOCKSIZE) # type: ignore
             except (OSError, ValueError) as e:
                 log.debug('FFmpeg stdin pipe closed: %s', e)
                 return

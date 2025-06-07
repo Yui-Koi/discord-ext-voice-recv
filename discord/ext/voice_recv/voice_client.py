@@ -7,10 +7,10 @@ import asyncio
 import logging
 
 import discord
-from discord.voice_state import VoiceConnectionState
+from discord.voice_state import VoiceConnectionState  # type: ignore
 from discord.utils import MISSING
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Awaitable
 
 from .gateway import hook
 from .reader import AudioReader
@@ -33,8 +33,10 @@ log = logging.getLogger(__name__)
 class VoiceRecvClient(discord.VoiceClient):
     endpoint_ip: str
     voice_port: int
+    _connection: VoiceConnectionState
+    wait_until_connected: Callable[[], Awaitable[None]]
 
-    def __init__(self, client: discord.Client, channel: discord.abc.Connectable):
+    def __init__(self, client: discord.Client, channel: discord.abc.Connectable):  # type: ignore
         super().__init__(client, channel)
 
         self._reader: AudioReader = MISSING

@@ -25,7 +25,8 @@ else:
     import array
     import asyncio
     import audioop
-
+    from typing import Union
+    import discord
     from collections import defaultdict
 
     from ..rtp import SilencePacket
@@ -34,7 +35,7 @@ else:
 
     if TYPE_CHECKING:
         from concurrent.futures import Future as CFuture
-        from typing import Literal, Callable, Optional, Any, Final, Protocol, Awaitable, TypeVar
+        from typing import Literal, Callable, Optional, Any, Final, Protocol, Awaitable, TypeVar, Coroutine
 
         from discord import Member
 
@@ -93,7 +94,7 @@ else:
                 lambda: _StreamData(stopper=None, recognizer=sr.Recognizer(), buffer=array.array('B'))
             )
 
-        def _await(self, coro: Awaitable[T]) -> CFuture[T]:
+        def _await(self, coro: Coroutine[Any, Any, T]) -> CFuture[T]:
             assert self.client is not None
             return asyncio.run_coroutine_threadsafe(coro, self.client.loop)
 
@@ -132,8 +133,8 @@ else:
                 text: Optional[str] = None
                 try:
                     # they changed recognize_google to be optionally assigned at runtime...
-                    func = getattr(recognizer, 'recognize_' + self.default_recognizer, recognizer.recognize_google) # type: ignore
-                    text = func(audio)  # type: ignore
+                    func = getattr(recognizer, 'recognize_' + self.default_recognizer, recognizer.recognize_google)
+                    text = func(audio)
                 except sr.UnknownValueError:
                     log.debug("Bad speech chunk")
                     # self._debug_audio_chunk(audio)
