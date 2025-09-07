@@ -30,7 +30,7 @@ else:
 
     from ..rtp import SilencePacket
 
-    from typing import TYPE_CHECKING, TypedDict
+    from typing import TYPE_CHECKING, TypedDict, Union
 
     if TYPE_CHECKING:
         from concurrent.futures import Future as CFuture
@@ -153,7 +153,7 @@ else:
             return cb
 
         @AudioSink.listener()
-        def on_voice_member_disconnect(self, member: Member, ssrc: Optional[int]) -> None:
+        def on_voice_member_disconnect(self, member: Union[discord.Member, discord.User], ssrc: Optional[int]) -> None:
             if member is not None:
                 self._drop(member.id)
 

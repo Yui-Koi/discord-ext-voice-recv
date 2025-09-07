@@ -63,7 +63,7 @@ class PacketDecoder:
 
     def _get_user(self, user_id: int) -> Optional[User]:
         vc: VoiceRecvClient = self.sink.voice_client  # type: ignore
-        return vc.guild.get_member(user_id) or vc.client.get_user(user_id)
+        return vc.guild.get_member(user_id) if vc.guild else vc.client.get_user(user_id)
 
     def _get_cached_member(self) -> Optional[User]:
         return self._get_user(self._cached_id) if self._cached_id else None
