@@ -114,7 +114,7 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
 
     elif op == PLATFORM:
         uid = int(data['user_id'])
-        member = vc.guild.get_member(uid) if vc.guild else self.client.get_user(uid) # type: ignore
+        member = vc.guild.get_member(uid) if vc.guild else vc.client.get_user(uid) # type: ignore
         vc.dispatch(
             "voice_member_platform",
             member,
