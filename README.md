@@ -22,8 +22,55 @@ python -m pip install git+https://github.com/imayhaveborkedit/discord-ext-voice-
 
 Naturally, this extension depends on `discord.py` being installed with voice support (`pynacl`).
 
-## Example
-See the [example script](examples/recv.py).
+### Installing optional extras
+Extras are split per module. You can install one, several, or all:
+
+- All extras:
+  ```
+  python -m pip install "discord-ext-voice-recv[extras]"
+  ```
+- Speech recognition extras:
+  ```
+  python -m pip install "discord-ext-voice-recv[extras_speech]"
+  ```
+- Local playback extras:
+  ```
+  python -m pip install "discord-ext-voice-recv[extras_local]"
+  ```
+
+Note: As of 0.5.1 the extras modules are no longer star-imported into `voice_recv.extras`. Import the specific module or access its symbols from the submodule, e.g.:
+```py
+from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
+# or
+from discord.ext.voice_recv.extras import speechrecognition
+sink = speechrecognition.SpeechRecognitionSink(...)
+```
+
+## Quickstart
+Minimal example to start listening and write PCM to a WAV file:
+
+```python
+import discord
+from discord.ext import commands
+from discord.ext import voice_recv
+
+bot = commands.Bot(command_prefix="!")
+
+@bot.command()
+async def join(ctx: commands.Context):
+    vc = await ctx.author.voice.channel.connect(cls=voice_recv.VoiceRecvClient)
+    sink = voice_recv.WaveSink("output.wav")  # alias: WavSink
+    vc.listen(sink)
+
+@bot.command()
+async def leave(ctx: commands.Context):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+
+bot.run("YOUR_TOKEN")
+```
+
+For a fuller example, see the [example script](examples/recv.py).
 
 ## Feature overview
 ### Custom VoiceProtocol client
@@ -42,7 +89,7 @@ The overall API is designed to mirror the discord.py voice send API, with `Audio
 Batteries included in the form of useful built in `AudioSinks`.  Some to match their `AudioSource` counterpart, some I merely considered useful.  See... uh... TODO.
 
 ### Optional extras
-Slightly more complex included batteries that depend on external packages.  These live in `voice_recv.extras`.  They can be installed by adding their optional dependency during install, ex: `pip install discord-ext-voice-recv[extras_thing]`, or all of them can be installed by specifying `extras` instead.  See [Extras](#extras).
+Slightly more complex included batteries that depend on external packages.  These live in `voice_recv.extras`.  See [Extras](#extras) for details and install instructions.
 
 ### More or less typed
 It's probably fine.
@@ -214,12 +261,30 @@ Virtual events for the state of the speaking indicator (the green circle).  Thes
 
 A helper sink for using `SpeechRecognition` to perform speech-to-text conversion.  Generally depends on third party services for reasonable quality.  Results may vary.
 
+Quick example:
+```python
+from discord.ext import voice_recv
+from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
+
+sink = SpeechRecognitionSink(language="en-US")
+# pipe into something else or inspect results inside your sink
+```
+
 ### `voice_recv.extras.localplayback`
 - Optional dependency: `extras_local`
 - Requires package: `pyaudio`
 - Provides: `LocalPlaybackSink`, `SimpleLocalPlaybackSink`
 
-Helper sinks for playing audio through an audio output device the local system.  Defaults to the system default device, but other output devices can also be specified.
+Helper sinks for playing audio through an audio output device on the local system. Defaults to the system default device, but other output devices can also be specified.
+
+Quick example:
+```python
+from discord.ext import voice_recv
+from discord.ext.voice_recv.extras.localplayback import SimpleLocalPlaybackSink
+
+sink = SimpleLocalPlaybackSink()  # uses default output device
+# listen and route incoming audio to the local speakers
+```
 
 ## Currently missing or WIP features
 - Silence generation (WIP, pending rewrite)
