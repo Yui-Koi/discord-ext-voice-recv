@@ -1,1 +1,7 @@
 discord.py-self[voice]
+sphinx
+myst-parser
+sphinx-autodoc-typehints
+sphinx-copybutton
+sphinx-design
+pydata-sphinx-theme
