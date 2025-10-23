@@ -2,22 +2,6 @@
 
 This section is generated from the source code for `discord.ext.voice_recv` and submodules.
 
-```{toctree}
-:maxdepth: 1
-
-api/discord.ext.voice_recv
-api/discord.ext.voice_recv.voice_client
-api/discord.ext.voice_recv.sinks
-api/discord.ext.voice_recv.reader
-api/discord.ext.voice_recv.router
-api/discord.ext.voice_recv.rtp
-api/discord.ext.voice_recv.video
-api/discord.ext.voice_recv.opus
-api/discord.ext.voice_recv.utils
-api/discord.ext.voice_recv.types
-api/discord.ext.voice_recv.enums
-```
-
 ```{autosummary}
 :toctree: api
 :caption: Package Index
@@ -38,8 +22,9 @@ discord.ext.voice_recv.enums
 
 ## Notes
 
+- The pages listed above are generated automatically into `reference/api/` during the build. On the first run you may see warnings about missing stub files; re-running the build will clear them.
 - Each item links back to source (View Source) and shows type hints.
 - Cross-references to upstream projects work via intersphinx, e.g.:
   - `discordpy:discord.VoiceClient`
   - `discordpyself:discord.Client`
-- If you add new modules or classes, they will appear here automatically on next build.
+- If you add new modules or classes, they will appear here automatically on the next build.
