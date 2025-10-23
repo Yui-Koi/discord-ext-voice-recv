@@ -44,6 +44,8 @@ autodoc_default_options = {
     "undoc-members": True,
     "show-inheritance": True,
 }
+# Mock optional extras so docs build without optional system deps
+autodoc_mock_imports = ["SpeechRecognition", "pyaudio"]
 
 napoleon_google_docstring = False
 napoleon_numpy_docstring = True
