@@ -1,24 +1,20 @@
-# discord-ext-voice-recv Documentation
+# discord-ext-voice-recv
 
-A voice receive extension for discord.py / discord.py-self. These docs are structured using the Diátaxis framework for clarity and cross-referencing:
+Voice receive extension for discord.py / discord.py-self.
 
-- Tutorials: learning-oriented, step-by-step introductions
-- How-to guides: goal-oriented recipes for common tasks
-- Explanations: background, architecture and design decisions
-- Reference: complete, structured API reference generated from the source
+These docs follow a clear structure so developers and users can learn, do, understand, and reference quickly.
 
-Use the left navigation to browse, or jump directly:
+- Tutorials: step-by-step learning
+- How-to guides: task-oriented recipes
+- Explanations: architecture and background
+- Reference: complete API, cross-referenced and source-linked
+- Changelog: update notes tracking changes
 
-- Tutorials → Getting started
-- How-to → Receive and process voice
-- Explanations → Architecture and event model
-- Reference → API for `discord.ext.voice_recv`
+## Quick links
 
-## External References
-
-- Official discord.py docs: https://discordpy.readthedocs.io/en/stable/
-- Official discord.py-self docs: https://discordpy-self.readthedocs.io/en/latest/
-- Discord Developer Docs: https://discord.com/developers/docs/intro
+- {dpy}
+- {dpyself}
+- {discord_dev_docs}
   - Voice: https://discord.com/developers/docs/topics/voice-connections
   - Gateway: https://discord.com/developers/docs/topics/gateway
 
@@ -45,7 +41,21 @@ explanations/architecture
 
 ```{toctree}
 :maxdepth: 2
+:caption: Examples
+
+examples/index
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: Reference
 
 reference/api
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Changelog
+
+changelog
 ```
