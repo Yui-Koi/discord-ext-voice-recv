@@ -694,14 +694,14 @@ class StreamConnection:
             self._dave_session.reinit(
                 self._dave_protocol_version,
                 int(self.user_id),
-                self.dave_channel_id,
+                int(self.dave_channel_id),
             )
             log.debug('Reinitialized DAVE session')
         else:
             self._dave_session = davey.DaveSession(
                 self._dave_protocol_version,
                 int(self.user_id),
-                self.dave_channel_id,
+                int(self.dave_channel_id),
             )
             log.debug(
                 'Initialized DAVE session: version=%s user=%s channel=%s',
