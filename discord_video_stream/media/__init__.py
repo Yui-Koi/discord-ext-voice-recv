@@ -8,6 +8,7 @@ from .demux import (
     Demuxer,
     parse_opus_duration,
 )
+from .pacer import FramePacer
 
 __all__ = [
     'StreamOptions',
@@ -18,4 +19,5 @@ __all__ = [
     'AudioStreamInfo',
     'Demuxer',
     'parse_opus_duration',
+    'FramePacer',
 ]
