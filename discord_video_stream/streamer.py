@@ -132,9 +132,11 @@ class VideoStreamer:
         events from the Discord gateway. These are not handled by
         discord.py natively, so we listen via the socket_raw_receive
         dispatch.
+
+        Chains onto any existing on_socket_raw_receive handler to
+        avoid overriding it.
         """
-        @self._client.event
-        async def on_socket_raw_receive(data):
+        async def _on_socket_raw_receive(data):
             if isinstance(data, str):
                 try:
                     msg = json.loads(data)
@@ -156,6 +158,18 @@ class VideoStreamer:
                 await self._on_voice_state_update(event_data)
             elif event == 'VOICE_SERVER_UPDATE':
                 await self._on_voice_server_update(event_data)
+
+        # Chain onto existing handler if present
+        prev = getattr(self._client, 'on_socket_raw_receive', None)
+
+        async def _chained_handler(data):
+            if prev:
+                result = prev(data)
+                if asyncio.iscoroutine(result):
+                    await result
+            await _on_socket_raw_receive(data)
+
+        self._client.on_socket_raw_receive = _chained_handler
 
     async def _on_stream_create(self, data: Dict[str, Any]) -> None:
         """Handle STREAM_CREATE gateway event.
@@ -219,6 +233,11 @@ class VideoStreamer:
         user_id = str(data.get('user_id', ''))
         if user_id == self._user_id:
             self._session_id = data.get('session_id')
+            # Propagate updated session_id to stream connection if it exists.
+            # Discord sends a new session_id when STREAM_CREATE is processed,
+            # and the stream connection needs the updated value for IDENTIFY.
+            if self._stream_conn is not None:
+                self._stream_conn.session_id = self._session_id or ''
             if self._voice_ready_event is not None:
                 self._voice_ready_event.set()
 
@@ -227,14 +246,21 @@ class VideoStreamer:
         pass
 
     def _send_gateway(self, op: int, data: Dict[str, Any]) -> None:
-        """Send an opcode to the Discord gateway."""
-        if self._voice_client is None:
-            return
+        """Send an opcode to the Discord MAIN gateway (not voice WS).
+
+        Gateway opcodes like STREAM_CREATE, STREAM_SET_PAUSED, and
+        VOICE_STATE_UPDATE must be sent over the main gateway connection,
+        not the voice WebSocket.
+        """
         try:
-            self._voice_client.ws.broadcast({
-                'op': op,
-                'd': data,
-            })
+            # dpy-self: client.ws is the main gateway
+            ws = self._client.ws
+            if ws is None:
+                log.error('Main gateway WS not available')
+                return
+            payload = {'op': op, 'd': data}
+            # dpy-self's DiscordWebSocket has .send() for JSON
+            asyncio.ensure_future(ws.send_as_json(payload))
         except Exception as e:
             log.error('Failed to send gateway opcode %s: %s', op, e)
 

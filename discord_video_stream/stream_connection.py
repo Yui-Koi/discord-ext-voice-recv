@@ -349,6 +349,9 @@ class StreamConnection:
 
         log.info('Connected to stream voice server')
 
+        # Send IDENTIFY immediately after connecting (before any messages)
+        self.identify()
+
         # Start receive loop
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
@@ -775,7 +778,7 @@ class StreamConnection:
         try:
             while True:
                 await asyncio.sleep(interval)
-                if self._ws is not None and self._ws.open:
+                if self._ws is not None and self._ws.state == websockets.State.OPEN:
                     self._send_json(VoiceOpCodes.HEARTBEAT, {
                         't': int(time.time() * 1000),
                         'seq_ack': self._sequence,
@@ -786,7 +789,7 @@ class StreamConnection:
     def _send_json(self, op: int, data: Dict[str, Any]) -> None:
         """Send a JSON message over the stream voice WebSocket."""
         import json
-        if self._ws is None or not self._ws.open:
+        if self._ws is None or not self._ws.state == websockets.State.OPEN:
             log.warning('Cannot send: stream WS not connected')
             return
         payload = json.dumps({'op': op, 'd': data})
@@ -798,7 +801,7 @@ class StreamConnection:
         Format (client-to-server): [1-byte opcode][payload]
         No sequence number prefix (unlike server-to-client).
         """
-        if self._ws is None or not self._ws.open:
+        if self._ws is None or not self._ws.state == websockets.State.OPEN:
             log.warning('Cannot send binary: stream WS not connected')
             return
         buf = bytes([op]) + data
