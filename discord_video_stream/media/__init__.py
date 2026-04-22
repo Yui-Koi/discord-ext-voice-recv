@@ -1,1 +1,21 @@
-# media - FFmpeg pipeline, demuxing, frame pacing (Phase 2-3)
+# media
+from .ffmpeg import StreamOptions, FFmpegProcess
+from .demux import (
+    FrameType,
+    MediaFrame,
+    VideoStreamInfo,
+    AudioStreamInfo,
+    Demuxer,
+    parse_opus_duration,
+)
+
+__all__ = [
+    'StreamOptions',
+    'FFmpegProcess',
+    'FrameType',
+    'MediaFrame',
+    'VideoStreamInfo',
+    'AudioStreamInfo',
+    'Demuxer',
+    'parse_opus_duration',
+]
