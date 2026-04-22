@@ -98,6 +98,7 @@ class VideoStreamer:
         self._video_pacer: Optional[FramePacer] = None
         self._audio_pacer: Optional[FramePacer] = None
         self._send_task: Optional[asyncio.Task] = None
+        self._rtcp_task: Optional[asyncio.Task] = None
 
         # Gateway event listeners
         self._stream_create_event: Optional[asyncio.Event] = None
@@ -260,9 +261,19 @@ class VideoStreamer:
                 return
             payload = {'op': op, 'd': data}
             # dpy-self's DiscordWebSocket has .send() for JSON
-            asyncio.ensure_future(ws.send_as_json(payload))
+            task = asyncio.ensure_future(ws.send_as_json(payload))
+            task.add_done_callback(self._handle_gateway_send_error)
         except Exception as e:
             log.error('Failed to send gateway opcode %s: %s', op, e)
+
+    @staticmethod
+    def _handle_gateway_send_error(task: asyncio.Task) -> None:
+        """Callback to log errors from fire-and-forget gateway sends."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error('Gateway send error: %s', exc)
 
     async def join_voice(self, guild_id: int, channel_id: int) -> None:
         """Join a voice channel using discord.py's VoiceClient.
@@ -430,18 +441,15 @@ class VideoStreamer:
             fps=options.frame_rate or 30,
         )
 
-        # Set up UDP send callback
-        def send_udp(packet: bytes) -> None:
+        # Set up UDP send callback — sends to the STREAM server's
+        # endpoint, NOT the main voice connection's endpoint.
+        # This is the critical fix for error 2012.
+        def send_udp(packet: bytes, ip: str, port: int) -> None:
             if self._voice_client is not None and hasattr(self._voice_client, '_connection'):
                 conn = self._voice_client._connection
                 if hasattr(conn, 'socket') and conn.socket is not None:
                     try:
-                        # For the stream connection, we send to the same
-                        # endpoint as the main voice connection
-                        conn.socket.sendto(
-                            packet,
-                            (conn.endpoint_ip, conn.voice_port),
-                        )
+                        conn.socket.sendto(packet, (ip, port))
                     except Exception as e:
                         log.warning('UDP send error: %s', e)
 
@@ -457,6 +465,12 @@ class VideoStreamer:
         self._send_task = asyncio.create_task(
             self._send_loop(proc.stdout),
             name='stream-send-loop',
+        )
+
+        # Start periodic RTCP Sender Report task (every 5 seconds)
+        self._rtcp_task = asyncio.create_task(
+            self._rtcp_sr_loop(),
+            name='stream-rtcp-sr',
         )
 
         log.info('Streaming started')
@@ -504,8 +518,29 @@ class VideoStreamer:
         finally:
             log.info('Send loop ended')
 
+    async def _rtcp_sr_loop(self) -> None:
+        """Periodically send RTCP Sender Reports for A/V sync.
+
+        Sends a Sender Report every 5 seconds. RTCP SRs allow
+        receivers to correlate NTP time with RTP timestamps,
+        which is essential for audio/video synchronization.
+        """
+        try:
+            while True:
+                await asyncio.sleep(5.0)
+                if self._video_sender is not None and self._video_sender.active:
+                    self._video_sender.send_rtcp_sender_report()
+                    log.debug('Sent RTCP Sender Report')
+        except asyncio.CancelledError:
+            log.debug('RTCP SR loop cancelled')
+
     def stop(self) -> None:
         """Stop the current stream."""
+        # Stop RTCP SR loop
+        if self._rtcp_task is not None:
+            self._rtcp_task.cancel()
+            self._rtcp_task = None
+
         # Stop send loop
         if self._send_task is not None:
             self._send_task.cancel()

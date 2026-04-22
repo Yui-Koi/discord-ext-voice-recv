@@ -192,7 +192,10 @@ class StreamConnection:
         self._dave_protocol_version: int = 0
         self._dave_pending_transitions: Dict[int, int] = {}
         self._dave_downgraded: bool = False
-        self._connected_users: set = set()
+        # Initialize connected users with our own user_id — we are
+        # always "connected" to the stream server. This ensures DAVE
+        # proposals reference us correctly.
+        self._connected_users: set = {user_id}
 
         # Sequence number for voice WS messages
         self._sequence: int = -1
@@ -332,7 +335,7 @@ class StreamConnection:
         if endpoint is None:
             raise RuntimeError('endpoint not set')
 
-        url = f'wss://{endpoint}/?v=8'
+        url = f'wss://{endpoint}/?v=9'
         log.info('Connecting to stream voice server: %s', url)
 
         try:
@@ -793,7 +796,8 @@ class StreamConnection:
             log.warning('Cannot send: stream WS not connected')
             return
         payload = json.dumps({'op': op, 'd': data})
-        asyncio.ensure_future(self._ws.send(payload))
+        task = asyncio.ensure_future(self._ws.send(payload))
+        task.add_done_callback(self._handle_send_error)
 
     def _send_binary(self, op: int, data: bytes) -> None:
         """Send a binary message over the stream voice WebSocket.
@@ -805,7 +809,17 @@ class StreamConnection:
             log.warning('Cannot send binary: stream WS not connected')
             return
         buf = bytes([op]) + data
-        asyncio.ensure_future(self._ws.send(buf))
+        task = asyncio.ensure_future(self._ws.send(buf))
+        task.add_done_callback(self._handle_send_error)
+
+    @staticmethod
+    def _handle_send_error(task: asyncio.Task) -> None:
+        """Callback to log errors from fire-and-forget send tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.warning('Stream WS send error: %s', exc)
 
     def identify(self) -> None:
         """Send IDENTIFY opcode to the stream voice server."""
@@ -827,8 +841,9 @@ class StreamConnection:
             'video': True,
             'streams': STREAMS_SIMULCAST,
             'max_dave_protocol_version': max_dave,
+            'channel_id': self.channel_id,  # v9 addition
         })
-        log.debug('Sent IDENTIFY: server_id=%s user_id=%s', sid, self.user_id)
+        log.debug('Sent IDENTIFY: server_id=%s user_id=%s channel_id=%s', sid, self.user_id, self.channel_id)
 
     def set_speaking(self, speaking: bool) -> None:
         """Send SPEAKING opcode with mode=2 (priority/soundshare).
@@ -887,7 +902,7 @@ class StreamConnection:
             raise RuntimeError('Cannot resume: no endpoint/token')
 
         self.state.started = True
-        url = f'wss://{self._endpoint}/?v=8'
+        url = f'wss://{self._endpoint}/?v=9'
 
         try:
             self._ws = await websockets.connect(url)

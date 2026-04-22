@@ -20,7 +20,7 @@ import os
 import struct
 import asyncio
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -110,7 +110,7 @@ class TestStreamConnectionVideoSenderWiring(unittest.TestCase):
         sender.start()
 
         packets = []
-        sender.set_send_callback(lambda pkt: packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 0.0, 33.33)
@@ -141,7 +141,7 @@ class TestStreamConnectionVideoSenderWiring(unittest.TestCase):
         sender.start()
 
         packets = []
-        sender.set_send_callback(lambda pkt: packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 0.0, 33.33)
@@ -181,7 +181,7 @@ class TestStreamConnectionVideoSenderWiring(unittest.TestCase):
         sender.start()
 
         packets = []
-        sender.set_send_callback(lambda pkt: packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 100.0, 33.33)  # 100ms -> 9000 ticks
@@ -211,7 +211,7 @@ class TestStreamConnectionVideoSenderWiring(unittest.TestCase):
         sender.start()
 
         packets = []
-        sender.set_send_callback(lambda pkt: packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: packets.append(pkt))
 
         # Large frame that produces multiple packets
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 3000
@@ -244,7 +244,7 @@ class TestStreamConnectionVideoSenderWiring(unittest.TestCase):
         sender.start()
 
         all_packets = []
-        sender.set_send_callback(lambda pkt: all_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: all_packets.append(pkt))
 
         frame1 = b'\x00\x00\x00\x01\x67' + b'\x42' * 10
         frame2 = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
@@ -254,6 +254,95 @@ class TestStreamConnectionVideoSenderWiring(unittest.TestCase):
         seqs = [struct.unpack('>H', pkt[2:4])[0] for pkt in all_packets]
         for i in range(1, len(seqs)):
             self.assertEqual(seqs[i], (seqs[i-1] + 1) & 0xFFFF)
+
+
+@unittest.skipUnless(HAS_NACL, "pynacl not installed")
+class TestStreamEndpointFix(unittest.TestCase):
+    """Test that video packets are sent to the STREAM server's endpoint,
+    not the main voice connection's endpoint. This is the error 2012 fix."""
+
+    def test_sender_uses_stream_endpoint(self):
+        """VideoSender must use the stream server's IP:port from READY."""
+        conn = StreamConnection(
+            guild_id='123', channel_id='456',
+            user_id='789', session_id='abc',
+        )
+        # Stream server is at 10.0.0.1:5000 (different from voice)
+        conn._handle_ready({
+            'ssrc': 1000, 'ip': '10.0.0.1', 'port': 5000,
+            'modes': ['aead_xchacha20_poly1305_rtpsize'],
+            'streams': [{'type': 'video', 'ssrc': 2000, 'rtx_ssrc': 2001,
+                         'rid': '100', 'quality': 100, 'active': True}],
+        })
+        conn._handle_select_protocol_ack({
+            'secret_key': list(nacl.utils.random(32)),
+            'mode': 'aead_xchacha20_poly1305_rtpsize',
+            'dave_protocol_version': 0,
+        })
+
+        sender = VideoSender(conn)
+        sender.start()
+
+        sent = []
+        sender.set_send_callback(lambda pkt, ip, port: sent.append((pkt, ip, port)))
+
+        frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
+        sender.send_frame(frame, 0.0, 33.33)
+
+        self.assertGreater(len(sent), 0)
+        for _, ip, port in sent:
+            self.assertEqual(ip, '10.0.0.1', 'Must send to stream server IP')
+            self.assertEqual(port, 5000, 'Must send to stream server port')
+
+    def test_sender_not_using_main_voice_endpoint(self):
+        """VideoSender must NOT use the main voice connection's endpoint."""
+        conn = StreamConnection(
+            guild_id='123', channel_id='456',
+            user_id='789', session_id='abc',
+        )
+        # Stream server is at 10.0.0.1:5000
+        conn._handle_ready({
+            'ssrc': 1000, 'ip': '10.0.0.1', 'port': 5000,
+            'modes': ['aead_xchacha20_poly1305_rtpsize'],
+            'streams': [{'type': 'video', 'ssrc': 2000, 'rtx_ssrc': 2001,
+                         'rid': '100', 'quality': 100, 'active': True}],
+        })
+        conn._handle_select_protocol_ack({
+            'secret_key': list(nacl.utils.random(32)),
+            'mode': 'aead_xchacha20_poly1305_rtpsize',
+            'dave_protocol_version': 0,
+        })
+
+        sender = VideoSender(conn)
+        sender.start()
+
+        sent = []
+        sender.set_send_callback(lambda pkt, ip, port: sent.append((pkt, ip, port)))
+
+        frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
+        sender.send_frame(frame, 0.0, 33.33)
+
+        # Verify NOT sending to a different endpoint
+        for _, ip, port in sent:
+            self.assertNotEqual(ip, '1.2.3.4', 'Must NOT send to voice server IP')
+            self.assertNotEqual(port, 1234, 'Must NOT send to voice server port')
+
+    def test_stream_ready_params_ip_port(self):
+        """READY params must correctly expose IP and port."""
+        conn = StreamConnection(
+            guild_id='123', channel_id='456',
+            user_id='789', session_id='abc',
+        )
+        conn._handle_ready({
+            'ssrc': 1000, 'ip': '10.0.0.1', 'port': 5000,
+            'modes': ['aead_xchacha20_poly1305_rtpsize'],
+            'streams': [{'type': 'video', 'ssrc': 2000, 'rtx_ssrc': 2001,
+                         'rid': '100', 'quality': 100, 'active': True}],
+        })
+
+        self.assertIsNotNone(conn.ready_params)
+        self.assertEqual(conn.ready_params.ip, '10.0.0.1')
+        self.assertEqual(conn.ready_params.port, 5000)
 
 
 class TestProtocolRoundTrip(unittest.TestCase):
@@ -467,7 +556,12 @@ class TestDAVEProtocolIntegration(unittest.TestCase):
 
         # _handle_select_protocol_ack sets version but doesn't call _init_dave
         # That happens in the JSON handler. Call it explicitly to test init.
-        conn._init_dave()
+        # Mock davey since it's not installed in this sandbox
+        mock_davey = MagicMock()
+        mock_davey.DaveSession.return_value = MagicMock()
+        mock_davey.DaveSession.return_value.get_serialized_key_package.return_value = b'\x01\x02'
+        with patch.dict('sys.modules', {'davey': mock_davey}):
+            conn._init_dave()
 
         self.assertIsNotNone(conn.dave_session)
         self.assertEqual(len(sent_binary), 1)

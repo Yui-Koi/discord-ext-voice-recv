@@ -91,8 +91,19 @@ class VideoSender:
         self._height: int = 0
         self._fps: int = 0
 
+        # Stream server endpoint (from READY opcode)
+        self._target_ip: str = ''
+        self._target_port: int = 0
+
+        # Packet/octet counters for RTCP Sender Reports
+        self._packet_count: int = 0
+        self._octet_count: int = 0
+
         # Running state
         self._active: bool = False
+
+        # Send callback: callable(packet, ip, port)
+        self._send_callback = None
 
     @property
     def active(self) -> bool:
@@ -117,6 +128,12 @@ class VideoSender:
 
         Requires stream_connection to have completed the handshake
         (READY and SELECT_PROTOCOL_ACK received).
+
+        The stream server endpoint (IP and port) is read from the
+        stream connection's READY params and stored for UDP sending.
+        This is the CRITICAL fix for error 2012: video packets must
+        go to the stream server's endpoint, NOT the main voice
+        connection's endpoint.
         """
         video_ssrc = self._stream_conn.video_ssrc
         if video_ssrc == 0:
@@ -130,6 +147,13 @@ class VideoSender:
         if mode is None:
             raise RuntimeError('Stream connection not ready (no encryption mode)')
 
+        # Extract stream server endpoint from READY params
+        ready = self._stream_conn.ready_params
+        if ready is None:
+            raise RuntimeError('Stream connection not ready (no READY params)')
+        self._target_ip = ready.ip
+        self._target_port = ready.port
+
         # Create H.264 packetizer with stream's video SSRC
         self._packetizer = H264Packetizer(
             ssrc=video_ssrc,
@@ -142,11 +166,13 @@ class VideoSender:
         self._sequence = 0
         self._timestamp = 0
         self._nonce_counter = 0
+        self._packet_count = 0
+        self._octet_count = 0
         self._active = True
 
         log.info(
-            'VideoSender started: ssrc=%s mode=%s',
-            video_ssrc, mode,
+            'VideoSender started: ssrc=%s mode=%s target=%s:%s',
+            video_ssrc, mode, self._target_ip, self._target_port,
         )
 
     def stop(self) -> None:
@@ -207,6 +233,8 @@ class VideoSender:
             encrypted = self._encryptor.encrypt_rtp(header, payload)
             wire_packet = header + encrypted
             self._send_udp(wire_packet)
+            self._packet_count += 1
+            self._octet_count += len(payload)
 
         return len(packets)
 
@@ -275,31 +303,31 @@ class VideoSender:
             return frame
 
     def _send_udp(self, packet: bytes) -> None:
-        """Send a packet over UDP via the stream connection.
+        """Send a packet over UDP to the stream server's endpoint.
 
-        Uses the stream connection's target endpoint. The UDP socket
-        is shared with the main voice connection via discord.py's
-        VoiceClient.
+        Uses the stream connection's READY params IP:port — NOT the
+        main voice connection's endpoint. This is the critical
+        distinction that fixes error 2012.
+
+        The UDP socket itself comes from the main voice connection
+        (discord.py's VoiceClient._connection.socket), but we send
+        to the stream server's address.
         """
-        # The stream connection's READY params contain the IP and port
-        # we should send to. However, for send-only connections, we
-        # use the same socket as the main voice connection.
-        # The actual UDP sending is handled by the caller (streamer.py)
-        # which has access to the VoiceClient's socket.
-        #
-        # For now, store the packet for the caller to send.
-        # This is a design decision: VideoSender produces wire packets,
-        # the streamer sends them.
-        if not hasattr(self, '_send_callback') or self._send_callback is None:
+        if self._send_callback is None:
             log.warning('No send callback configured')
             return
-        self._send_callback(packet)
+        try:
+            self._send_callback(packet, self._target_ip, self._target_port)
+        except Exception as e:
+            log.warning('UDP send error: %s', e)
 
     def set_send_callback(self, callback) -> None:
         """Set the callback for sending UDP packets.
 
-        The callback receives a single bytes argument (the complete
-        wire packet: header + encrypted payload + nonce).
+        The callback signature is: callback(packet, ip, port)
+        - packet: complete wire packet (header + encrypted payload + nonce)
+        - ip: stream server IP (from READY params)
+        - port: stream server port (from READY params)
         """
         self._send_callback = callback
 
@@ -327,8 +355,8 @@ class VideoSender:
             ssrc=self._stream_conn.video_ssrc,
             ntp_timestamp=ntp_timestamp,
             rtp_timestamp=self._timestamp,
-            packet_count=0,  # TODO: track actual count
-            octet_count=0,   # TODO: track actual count
+            packet_count=self._packet_count,
+            octet_count=self._octet_count,
         )
         self._send_udp(bytes(sr))
 

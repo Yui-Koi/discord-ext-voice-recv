@@ -38,6 +38,8 @@ def _make_mock_stream_conn(
     secret_key=None,
     mode='aead_xchacha20_poly1305_rtpsize',
     dave_ready=False,
+    stream_ip='10.0.0.1',
+    stream_port=5000,
 ):
     """Create a mock StreamConnection for testing."""
     conn = MagicMock()
@@ -48,6 +50,11 @@ def _make_mock_stream_conn(
     conn.encryption_mode = mode
     conn.dave_ready = dave_ready
     conn.dave_session = None
+    # Stream server endpoint (from READY opcode) — the error 2012 fix
+    ready = MagicMock()
+    ready.ip = stream_ip
+    ready.port = stream_port
+    conn.ready_params = ready
     return conn
 
 
@@ -115,7 +122,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         # SPS + PPS + IDR keyframe
         frame = (
@@ -135,7 +142,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 0.0, 33.33)
@@ -151,7 +158,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 100.0, 33.33)  # 100ms -> 9000
@@ -167,7 +174,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 0.0, 33.33)
@@ -186,7 +193,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 0.0, 33.33)
@@ -202,7 +209,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
         sender.send_frame(frame, 0.0, 33.33)
@@ -220,7 +227,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         # Large frame that produces multiple packets
         frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 3000
@@ -242,7 +249,7 @@ class TestVideoSenderFramePipeline(unittest.TestCase):
         sender.start()
 
         all_packets = []
-        sender.set_send_callback(lambda pkt: all_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: all_packets.append(pkt))
 
         frame1 = b'\x00\x00\x00\x01\x67' + b'\x42' * 10  # SPS
         frame2 = b'\x00\x00\x00\x01\x65' + b'\x88' * 20  # IDR
@@ -272,7 +279,7 @@ class TestVideoSenderSPSVUI(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         # Build a frame with a minimal SPS
         from protocol.vui import BitstreamWriter
@@ -312,7 +319,7 @@ class TestVideoSenderSPSVUI(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         frame = b'\x00\x00\x00\x01\x67' + b'\x42' * 10
         count = sender.send_frame(frame, 0.0, 33.33)
@@ -345,14 +352,68 @@ class TestVideoSenderDAVE(unittest.TestCase):
         sender = VideoSender(conn)
         sender.start()
 
-        sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        # Mock the davey import so _dave_encrypt can use it
+        mock_davey = MagicMock()
+        mock_davey.MediaType.video = 1
+        mock_davey.Codec.h264 = 4
 
-        frame = b'\x00\x00\x00\x01\x65\x88\x84'
-        sender.send_frame(frame, 0.0, 33.33)
+        with patch.dict('sys.modules', {'davey': mock_davey}):
+            frame = b'\x00\x00\x00\x01\x65\x88\x84'
+            sender._dave_encrypt(frame)
 
         # DAVE encrypt should have been called
-        mock_session.encrypt.assert_called_once()
+        mock_session.encrypt.assert_called_once_with(1, 4, frame)
+
+
+@unittest.skipUnless(HAS_NACL, "pynacl not installed")
+class TestVideoSenderEndpoint(unittest.TestCase):
+    """Test that video packets are sent to the stream server's endpoint."""
+
+    def test_send_callback_receives_stream_endpoint(self):
+        """Callback must receive the stream server's IP and port."""
+        conn = _make_mock_stream_conn(
+            video_ssrc=2000, stream_ip='10.0.0.1', stream_port=5000,
+        )
+        sender = VideoSender(conn)
+        sender.start()
+
+        sent = []
+        sender.set_send_callback(lambda pkt, ip, port: sent.append((pkt, ip, port)))
+
+        frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
+        sender.send_frame(frame, 0.0, 33.33)
+
+        self.assertGreater(len(sent), 0)
+        for _, ip, port in sent:
+            self.assertEqual(ip, '10.0.0.1')
+            self.assertEqual(port, 5000)
+
+    def test_different_stream_endpoints(self):
+        """Different stream servers should use different endpoints."""
+        conn = _make_mock_stream_conn(
+            video_ssrc=2000, stream_ip='192.168.1.100', stream_port=9999,
+        )
+        sender = VideoSender(conn)
+        sender.start()
+
+        sent = []
+        sender.set_send_callback(lambda pkt, ip, port: sent.append((pkt, ip, port)))
+
+        frame = b'\x00\x00\x00\x01\x65' + b'\x88' * 20
+        sender.send_frame(frame, 0.0, 33.33)
+
+        for _, ip, port in sent:
+            self.assertEqual(ip, '192.168.1.100')
+            self.assertEqual(port, 9999)
+
+    def test_start_extracts_endpoint_from_ready_params(self):
+        """start() must read IP/port from stream_conn.ready_params."""
+        conn = _make_mock_stream_conn(stream_ip='172.16.0.1', stream_port=7777)
+        sender = VideoSender(conn)
+        sender.start()
+
+        self.assertEqual(sender._target_ip, '172.16.0.1')
+        self.assertEqual(sender._target_port, 7777)
 
 
 class TestVideoSenderRTCP(unittest.TestCase):
@@ -365,7 +426,7 @@ class TestVideoSenderRTCP(unittest.TestCase):
         sender.start()
 
         sent_packets = []
-        sender.set_send_callback(lambda pkt: sent_packets.append(pkt))
+        sender.set_send_callback(lambda pkt, ip=None, port=None: sent_packets.append(pkt))
 
         sender.send_rtcp_sender_report()
         self.assertEqual(len(sent_packets), 1)
