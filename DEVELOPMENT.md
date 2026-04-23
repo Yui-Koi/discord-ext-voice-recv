@@ -463,7 +463,19 @@ def test_without_dave():
 
 ---
 
-## 8. Risks and Mitigations
+## 8. Risks, Mitigations, and Known Quirks
+
+### aspectlib 2.0.0 Quirks
+
+- **Rollback on `__main__` functions**: `aspectlib.weave(func, aspectlib.Rollback)` fails when the function is defined in `__main__` because aspectlib tries to find the function in the module namespace. This does NOT affect functions in proper packages. Workaround: weave/rollback on classes or modules, not standalone functions.
+
+- **Class weave and `self` binding**: When weaving a class with `@aspectlib.Aspect(bind=True)`, the `cutpoint` is the unbound function. Calling `cutpoint(*args, **kwargs)` requires passing `self` explicitly. This is handled correctly in our aspects (we only read `cutpoint.__name__`, never call it).
+
+- **Weave state persistence**: `aspectlib.weave(target, aspectlib.Rollback)` must be called explicitly to undo a weave. If a test weaves and doesn't rollback, subsequent tests see the woven version. Our `remove_debug_aspects()` handles this.
+
+- **`@aspectlib.Aspect` vs `@aspectlib.aspect`**: Version 2.0.0 uses `@aspectlib.Aspect` (capital A) and `@aspectlib.Aspect(bind=True)` for access to the cutpoint function. The lowercase `@aspectlib.aspect` does not exist in 2.0.0.
+
+### General Risks
 
 | Risk | Mitigation |
 |---|---|
