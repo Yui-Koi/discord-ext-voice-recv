@@ -58,6 +58,10 @@ class FramePacer:
         self._sync_enabled: bool = True
         self._no_sleep: bool = False
 
+        # Event signaled when this pacer's PTS is updated.
+        # The sync partner awaits this instead of polling.
+        self._pts_updated = asyncio.Event()
+
     @property
     def clock_rate(self) -> int:
         return self._clock_rate
@@ -121,8 +125,10 @@ class FramePacer:
         self._start_pts = None
 
     def update_pts(self, pts_ms: float) -> None:
-        """Update the current PTS and emit for sync partner comparison."""
+        """Update the current PTS and signal the sync partner."""
         self._pts = pts_ms
+        self._pts_updated.set()
+        self._pts_updated.clear()
 
     async def pace(self, pts_ms: float, frametime_ms: float) -> None:
         """Sleep if needed to maintain correct frame timing.
@@ -172,6 +178,8 @@ class FramePacer:
                         'Stream is ahead by %.1fms (pts=%.1f, partner=%.1f), waiting',
                         delta, pts_ms, partner_pts,
                     )
+                    # Wait for the sync partner to update its PTS
+                    # instead of polling at frametime intervals
                     while self._sync_enabled and self._sync_partner is not None:
                         partner_pts = self._sync_partner._pts
                         if partner_pts is None:
@@ -179,7 +187,14 @@ class FramePacer:
                         delta = pts_ms - partner_pts
                         if not self._is_ahead(delta, frametime_ms):
                             break
-                        await asyncio.sleep(frametime_ms / 1000)
+                        # Wait for partner PTS update with timeout
+                        try:
+                            await asyncio.wait_for(
+                                self._sync_partner._pts_updated.wait(),
+                                timeout=frametime_ms / 1000,
+                            )
+                        except asyncio.TimeoutError:
+                            pass
                     self.reset_timing()
                     return
 

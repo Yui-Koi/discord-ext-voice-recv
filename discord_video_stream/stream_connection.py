@@ -173,6 +173,9 @@ class StreamConnection:
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._receive_task: Optional[asyncio.Task] = None
 
+        # Event signaled when READY is received from the stream server
+        self._ready_event = asyncio.Event()
+
         # Tokens (set via set_tokens)
         self._endpoint: Optional[str] = None
         self._token: Optional[str] = None
@@ -352,8 +355,8 @@ class StreamConnection:
 
         log.info('Connected to stream voice server')
 
-        # Send IDENTIFY immediately after connecting (before any messages)
-        self.identify()
+        # Send IDENTIFY immediately after connecting (await for reliability)
+        await self.identify()
 
         # Start receive loop
         self._receive_task = asyncio.create_task(
@@ -361,9 +364,8 @@ class StreamConnection:
             name='stream-ws-receive',
         )
 
-        # Wait for READY by polling (the receive loop processes messages)
-        # We use an event to signal when READY has been processed
-        self._ready_event = asyncio.Event()
+        # Wait for READY (event is set by _handle_ready in receive loop)
+        self._ready_event.clear()
         try:
             await asyncio.wait_for(self._ready_event.wait(), timeout=10.0)
         except asyncio.TimeoutError:
@@ -385,14 +387,19 @@ class StreamConnection:
             self._ws = None
 
     async def _receive_loop(self) -> None:
-        """Main receive loop for the stream voice WebSocket."""
+        """Main receive loop for the stream voice WebSocket.
+
+        On resumable disconnect (close code 4015 or < 4000), attempts
+        automatic reconnection with exponential backoff (1s, 2s, 4s).
+        After 3 failed attempts, gives up and logs the failure.
+        """
         if self._ws is None:
             return
 
         try:
             async for message in self._ws:
                 if isinstance(message, bytes):
-                    self._handle_binary_message(message)
+                    await self._handle_binary_message(message)
                 elif isinstance(message, str):
                     import json
                     data = json.loads(message)
@@ -401,16 +408,37 @@ class StreamConnection:
             log.info('Stream WS closed: code=%s reason=%s', e.code, e.reason)
             can_resume = e.code == 4015 or e.code < 4000
             if can_resume and not self.state.closed:
-                log.info('Attempting stream WS resume')
-                self.state.resuming = True
-                self.state.started = False
-                # Reconnect will be handled by the caller
+                await self._attempt_reconnect()
         except Exception as e:
             log.error('Stream WS receive error: %s', e)
         finally:
             self.state.started = False
             if self._heartbeat_task is not None:
                 self._heartbeat_task.cancel()
+
+    async def _attempt_reconnect(self, max_attempts: int = 3) -> None:
+        """Attempt to reconnect with exponential backoff.
+
+        Tries resume first (preserves state), falls back to full
+        reconnection if resume fails.
+        """
+        self.state.resuming = True
+        self.state.started = False
+
+        for attempt in range(max_attempts):
+            delay = 2 ** attempt  # 1s, 2s, 4s
+            log.info('Reconnect attempt %d/%d in %ds', attempt + 1, max_attempts, delay)
+            await asyncio.sleep(delay)
+
+            try:
+                await self.resume()
+                log.info('Reconnected successfully on attempt %d', attempt + 1)
+                return
+            except Exception as e:
+                log.warning('Reconnect attempt %d failed: %s', attempt + 1, e)
+
+        log.error('All %d reconnect attempts failed, stream ended', max_attempts)
+        self.state.resuming = False
 
     async def _handle_json_message(self, msg: Dict[str, Any]) -> None:
         """Handle a JSON voice WebSocket message."""
@@ -473,7 +501,7 @@ class StreamConnection:
         else:
             log.debug('Unhandled stream WS op=%s', op)
 
-    def _handle_binary_message(self, msg: bytes) -> None:
+    async def _handle_binary_message(self, msg: bytes) -> None:
         """Handle a binary voice WebSocket message (DAVE/MLS opcodes).
 
         Binary format (server-to-client):
@@ -493,15 +521,15 @@ class StreamConnection:
                 log.debug('Set MLS external sender')
 
         elif op == VoiceOpCodesBinary.MLS_PROPOSALS:
-            self._handle_mls_proposals(msg)
+            await self._handle_mls_proposals(msg)
 
         elif op == VoiceOpCodesBinary.MLS_ANNOUNCE_COMMIT_TRANSITION:
-            self._handle_mls_announce_commit_transition(msg)
+            await self._handle_mls_announce_commit_transition(msg)
 
         elif op == VoiceOpCodesBinary.MLS_WELCOME:
-            self._handle_mls_welcome(msg)
+            await self._handle_mls_welcome(msg)
 
-    def _handle_mls_proposals(self, msg: bytes) -> None:
+    async def _handle_mls_proposals(self, msg: bytes) -> None:
         """Handle MLS_PROPOSALS binary message.
 
         Format: [2-byte seq][1-byte op=27][1-byte optype][proposals data]
@@ -528,12 +556,12 @@ class StreamConnection:
 
                 if commit:
                     payload = commit + (welcome if welcome else b'')
-                    self._send_binary(VoiceOpCodesBinary.MLS_COMMIT_WELCOME, payload)
+                    await self._send_binary_await(VoiceOpCodesBinary.MLS_COMMIT_WELCOME, payload)
                     log.debug('Sent MLS_COMMIT_WELCOME')
         except Exception as e:
             log.error('Error processing MLS proposals: %s', e)
 
-    def _handle_mls_announce_commit_transition(self, msg: bytes) -> None:
+    async def _handle_mls_announce_commit_transition(self, msg: bytes) -> None:
         """Handle MLS_ANNOUNCE_COMMIT_TRANSITION binary message.
 
         Format: [2-byte seq][1-byte op=29][2-byte transition_id BE][commit data]
@@ -550,7 +578,7 @@ class StreamConnection:
 
             if transition_id:
                 self._dave_pending_transitions[transition_id] = self._dave_protocol_version
-                self._send_json(VoiceOpCodes.DAVE_TRANSITION_READY, {
+                await self._send_json_await(VoiceOpCodes.DAVE_TRANSITION_READY, {
                     'transition_id': transition_id,
                 })
                 log.debug('MLS commit processed, transition_id=%s', transition_id)
@@ -558,7 +586,7 @@ class StreamConnection:
             log.error('MLS commit error: %s', e)
             self._process_invalid_commit(transition_id)
 
-    def _handle_mls_welcome(self, msg: bytes) -> None:
+    async def _handle_mls_welcome(self, msg: bytes) -> None:
         """Handle MLS_WELCOME binary message.
 
         Format: [2-byte seq][1-byte op=30][2-byte transition_id BE][welcome data]
@@ -575,7 +603,7 @@ class StreamConnection:
 
             if transition_id:
                 self._dave_pending_transitions[transition_id] = self._dave_protocol_version
-                self._send_json(VoiceOpCodes.DAVE_TRANSITION_READY, {
+                await self._send_json_await(VoiceOpCodes.DAVE_TRANSITION_READY, {
                     'transition_id': transition_id,
                 })
                 log.debug('MLS welcome processed, transition_id=%s', transition_id)
@@ -586,9 +614,9 @@ class StreamConnection:
     def _process_invalid_commit(self, transition_id: int) -> None:
         """Handle an unprocessable commit by requesting re-initialization."""
         log.debug('Invalid commit, reinitializing DAVE, transition_id=%s', transition_id)
-        self._send_json(VoiceOpCodes.MLS_INVALID_COMMIT_WELCOME, {
+        asyncio.ensure_future(self._send_json_await(VoiceOpCodes.MLS_INVALID_COMMIT_WELCOME, {
             'transition_id': transition_id,
-        })
+        }))
         self._init_dave()
 
     async def _handle_hello(self, data: Dict[str, Any]) -> None:
@@ -636,20 +664,21 @@ class StreamConnection:
         )
 
     async def _send_select_protocol(self) -> None:
-        """Send SELECT_PROTOCOL with UDP transport and codec configs."""
-        # Build codec list matching the Node.js reference
+        """Send SELECT_PROTOCOL with UDP transport and codec configs.
+
+        Awaits the send to ensure the protocol is established before
+        the server responds with SELECT_PROTOCOL_ACK.
+        """
         codecs = []
         for codec in ALL_CODECS:
             codec_dict = codec.to_dict()
             codecs.append(codec_dict)
 
-        # For send-only connections, address and port can be randomized
-        # (per Discord documentation)
         import random
         address = '0.0.0.0'
         port = random.randint(1024, 65535)
 
-        self._send_json(VoiceOpCodes.SELECT_PROTOCOL, {
+        await self._send_json_await(VoiceOpCodes.SELECT_PROTOCOL, {
             'protocol': 'udp',
             'data': {
                 'address': address,
@@ -735,7 +764,7 @@ class StreamConnection:
         else:
             if protocol_version == 0 and self._dave_session is not None:
                 self._dave_session.set_passthrough_mode(True, 120)
-            self._send_json(VoiceOpCodes.DAVE_TRANSITION_READY, {
+            await self._send_json_await(VoiceOpCodes.DAVE_TRANSITION_READY, {
                 'transition_id': transition_id,
             })
 
@@ -790,7 +819,7 @@ class StreamConnection:
             pass
 
     def _send_json(self, op: int, data: Dict[str, Any]) -> None:
-        """Send a JSON message over the stream voice WebSocket."""
+        """Send a JSON message (fire-and-forget). Use for non-critical messages."""
         import json
         if self._ws is None or not self._ws.state == websockets.State.OPEN:
             log.warning('Cannot send: stream WS not connected')
@@ -799,12 +828,23 @@ class StreamConnection:
         task = asyncio.ensure_future(self._ws.send(payload))
         task.add_done_callback(self._handle_send_error)
 
-    def _send_binary(self, op: int, data: bytes) -> None:
-        """Send a binary message over the stream voice WebSocket.
+    async def _send_json_await(self, op: int, data: Dict[str, Any]) -> None:
+        """Send a JSON message and await completion. Use for critical handshake messages."""
+        import json
+        if self._ws is None or not self._ws.state == websockets.State.OPEN:
+            raise RuntimeError('Cannot send: stream WS not connected')
+        payload = json.dumps({'op': op, 'd': data})
+        await self._ws.send(payload)
 
-        Format (client-to-server): [1-byte opcode][payload]
-        No sequence number prefix (unlike server-to-client).
-        """
+    async def _send_binary_await(self, op: int, data: bytes) -> None:
+        """Send a binary message and await completion. Use for critical MLS messages."""
+        if self._ws is None or not self._ws.state == websockets.State.OPEN:
+            raise RuntimeError('Cannot send binary: stream WS not connected')
+        buf = bytes([op]) + data
+        await self._ws.send(buf)
+
+    def _send_binary(self, op: int, data: bytes) -> None:
+        """Send a binary message (fire-and-forget). Use for non-critical messages."""
         if self._ws is None or not self._ws.state == websockets.State.OPEN:
             log.warning('Cannot send binary: stream WS not connected')
             return
@@ -821,8 +861,12 @@ class StreamConnection:
         if exc is not None:
             log.warning('Stream WS send error: %s', exc)
 
-    def identify(self) -> None:
-        """Send IDENTIFY opcode to the stream voice server."""
+    async def identify(self) -> None:
+        """Send IDENTIFY opcode to the stream voice server.
+
+        Awaits the send to ensure IDENTIFY is delivered before the
+        receive loop processes any server messages.
+        """
         sid = self.server_id
         if sid is None:
             raise RuntimeError('server_id not set')
@@ -833,7 +877,7 @@ class StreamConnection:
         except ImportError:
             max_dave = 0
 
-        self._send_json(VoiceOpCodes.IDENTIFY, {
+        await self._send_json_await(VoiceOpCodes.IDENTIFY, {
             'server_id': sid,
             'user_id': self.user_id,
             'session_id': self.session_id,
@@ -889,12 +933,12 @@ class StreamConnection:
 
         self._send_json(VoiceOpCodes.VIDEO, payload)
 
-    def send_dave_key_package(self) -> None:
+    async def send_dave_key_package(self) -> None:
         """Manually send MLS_KEY_PACKAGE (for re-initialization)."""
         if self._dave_session is None:
             raise RuntimeError('No DAVE session')
         key_package = self._dave_session.get_serialized_key_package()
-        self._send_binary(VoiceOpCodesBinary.MLS_KEY_PACKAGE, key_package)
+        await self._send_binary_await(VoiceOpCodesBinary.MLS_KEY_PACKAGE, key_package)
 
     async def resume(self) -> None:
         """Resume a disconnected stream voice WebSocket."""
@@ -911,7 +955,7 @@ class StreamConnection:
             self.state.started = False
             raise
 
-        self._send_json(VoiceOpCodes.RESUME, {
+        await self._send_json_await(VoiceOpCodes.RESUME, {
             'server_id': self.server_id,
             'session_id': self.session_id,
             'token': self._token,

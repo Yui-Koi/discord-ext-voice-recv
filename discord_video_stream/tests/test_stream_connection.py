@@ -19,6 +19,16 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+
+async def _mock_send_json_await(sent_list, op, data):
+    """Mock for _send_json_await that appends to a list."""
+    sent_list.append((op, data))
+
+
+async def _mock_send_binary_await(sent_list, op, data):
+    """Mock for _send_binary_await that appends to a list."""
+    sent_list.append((op, data))
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from stream_connection import (
@@ -376,7 +386,7 @@ class TestBinaryMessageHandling(unittest.TestCase):
         sender_data = b'\x01\x02\x03\x04'
         msg = struct.pack('>H', 100) + bytes([VoiceOpCodesBinary.MLS_EXTERNAL_SENDER]) + sender_data
 
-        conn._handle_binary_message(msg)
+        asyncio.get_event_loop().run_until_complete(conn._handle_binary_message(msg))
         mock_session.set_external_sender.assert_called_once_with(sender_data)
 
     def test_mls_proposals(self):
@@ -393,13 +403,13 @@ class TestBinaryMessageHandling(unittest.TestCase):
         conn._connected_users = {'111', '222'}
 
         sent_binary = []
-        conn._send_binary = lambda op, data: sent_binary.append((op, data))
+        conn._send_binary_await = lambda op, data: _mock_send_binary_await(sent_binary, op, data)
 
         # Build: [2-byte seq][1-byte op=27][1-byte optype=0][proposals]
         proposals = b'\x00\x01\x02'
         msg = struct.pack('>H', 100) + bytes([VoiceOpCodesBinary.MLS_PROPOSALS, 0]) + proposals
 
-        conn._handle_binary_message(msg)
+        asyncio.get_event_loop().run_until_complete(conn._handle_binary_message(msg))
         mock_session.process_proposals.assert_called_once()
 
     def test_mls_announce_commit_transition(self):
@@ -412,14 +422,14 @@ class TestBinaryMessageHandling(unittest.TestCase):
         conn._dave_protocol_version = 1
 
         sent_json = []
-        conn._send_json = lambda op, data: sent_json.append((op, data))
+        conn._send_json_await = lambda op, data: _mock_send_json_await(sent_json, op, data)
 
         # Build: [2-byte seq][1-byte op=29][2-byte transition_id][commit data]
         transition_id = 42
         commit_data = b'\x01\x02\x03'
         msg = struct.pack('>H', 100) + bytes([VoiceOpCodesBinary.MLS_ANNOUNCE_COMMIT_TRANSITION]) + struct.pack('>H', transition_id) + commit_data
 
-        conn._handle_binary_message(msg)
+        asyncio.get_event_loop().run_until_complete(conn._handle_binary_message(msg))
         mock_session.process_commit.assert_called_once_with(commit_data)
 
         # Should send DAVE_TRANSITION_READY
@@ -438,14 +448,14 @@ class TestBinaryMessageHandling(unittest.TestCase):
         conn._dave_protocol_version = 1
 
         sent_json = []
-        conn._send_json = lambda op, data: sent_json.append((op, data))
+        conn._send_json_await = lambda op, data: _mock_send_json_await(sent_json, op, data)
 
         # Build: [2-byte seq][1-byte op=30][2-byte transition_id][welcome data]
         transition_id = 5
         welcome_data = b'\x04\x05\x06'
         msg = struct.pack('>H', 100) + bytes([VoiceOpCodesBinary.MLS_WELCOME]) + struct.pack('>H', transition_id) + welcome_data
 
-        conn._handle_binary_message(msg)
+        asyncio.get_event_loop().run_until_complete(conn._handle_binary_message(msg))
         mock_session.process_welcome.assert_called_once_with(welcome_data)
 
     def test_binary_message_too_short(self):
@@ -454,8 +464,8 @@ class TestBinaryMessageHandling(unittest.TestCase):
             user_id='789', session_id='abc',
         )
         # Should not raise
-        conn._handle_binary_message(b'\x00')
-        conn._handle_binary_message(b'')
+        asyncio.get_event_loop().run_until_complete(conn._handle_binary_message(b'\x00'))
+        asyncio.get_event_loop().run_until_complete(conn._handle_binary_message(b''))
 
 
 class TestIdentifyOpcode(unittest.TestCase):
@@ -471,9 +481,9 @@ class TestIdentifyOpcode(unittest.TestCase):
         conn.set_tokens('endpoint.discord.gg', 'voice_token')
 
         sent = []
-        conn._send_json = lambda op, data: sent.append((op, data))
+        conn._send_json_await = lambda op, data: _mock_send_json_await(sent, op, data)
 
-        conn.identify()
+        asyncio.get_event_loop().run_until_complete(conn.identify())
 
         op, data = sent[0]
         self.assertEqual(op, VoiceOpCodes.IDENTIFY)
@@ -495,9 +505,9 @@ class TestIdentifyOpcode(unittest.TestCase):
         conn.set_tokens('endpoint.discord.gg', 'voice_token')
 
         sent = []
-        conn._send_json = lambda op, data: sent.append((op, data))
+        conn._send_json_await = lambda op, data: _mock_send_json_await(sent, op, data)
 
-        conn.identify()
+        asyncio.get_event_loop().run_until_complete(conn.identify())
 
         op, data = sent[0]
         self.assertEqual(data['server_id'], '123456')
@@ -540,7 +550,7 @@ class TestDAVETransitions(unittest.TestCase):
         conn._dave_protocol_version = 1
 
         sent = []
-        conn._send_json = lambda op, data: sent.append((op, data))
+        conn._send_json_await = lambda op, data: _mock_send_json_await(sent, op, data)
 
         loop = asyncio.new_event_loop()
 
