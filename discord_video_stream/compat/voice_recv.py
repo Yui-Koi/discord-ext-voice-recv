@@ -93,18 +93,30 @@ if HAS_VOICE_RECV:
             self._stream_conn = None
             self._video_sender = None
 
-        def send_video_packet(self, packet: bytes) -> None:
+        def send_video_packet(self, packet: bytes, ip: str = None, port: int = None) -> None:
             """Send a video RTP packet over the shared UDP socket.
 
-            Uses the same socket as the receive side, but sends to
-            the voice server endpoint (same as audio).
+            Parameters
+            ----------
+            packet : bytes
+                Complete wire packet (RTP header + encrypted payload + nonce).
+            ip : str, optional
+                Target IP. If None, uses the stream connection's endpoint.
+            port : int, optional
+                Target port. If None, uses the stream connection's endpoint.
             """
             if self._connection and self._connection.socket:
                 try:
-                    self._connection.socket.sendto(
-                        packet,
-                        (self._connection.endpoint_ip, self._connection.voice_port),
-                    )
+                    # Use stream connection endpoint if not specified
+                    if ip is None or port is None:
+                        if self._stream_conn is not None and self._stream_conn.ready_params is not None:
+                            ready = self._stream_conn.ready_params
+                            ip = ready.ip
+                            port = ready.port
+                        else:
+                            log.warning('No stream endpoint available for video send')
+                            return
+                    self._connection.socket.sendto(packet, (ip, port))
                 except Exception as e:
                     log.warning('Video packet send error: %s', e)
 

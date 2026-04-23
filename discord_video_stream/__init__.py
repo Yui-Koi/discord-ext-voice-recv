@@ -6,7 +6,7 @@ from .stream_connection import (
     StreamReadyParams,
     StreamSessionDescription,
 )
-from .voice_send import VideoSender
+from .voice_send import VideoSender, AudioSender
 from .media import (
     StreamOptions,
     FFmpegProcess,
@@ -58,6 +58,7 @@ __all__ = [
     'StreamSessionDescription',
     # Video sender
     'VideoSender',
+    'AudioSender',
     # Media
     'StreamOptions',
     'FFmpegProcess',

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     'VideoSender',
+    'AudioSender',
 ]
 
 log = logging.getLogger(__name__)
@@ -367,3 +368,166 @@ class VideoSender:
     def encrypt_frame_for_test(self, frame: bytes) -> bytes:
         """Encrypt a frame using DAVE (for testing only)."""
         return self._dave_encrypt(frame)
+
+
+class AudioSender:
+    """Manages audio frame sending for a Go Live stream.
+
+    Sends Opus audio frames through the stream connection's RTP path.
+    Opus frames are small enough to fit in a single RTP packet (no
+    fragmentation needed). The pipeline is:
+
+    1. DAVE encrypt (dave_session.encrypt_opus(frame))
+    2. Build RTP packet (Opus PT 120, 48kHz clock)
+    3. Transport encrypt (AEAD with stream secret key)
+    4. UDP sendto (stream server endpoint)
+
+    Reference: WebRtcWrapper.ts sendAudioFrame
+    """
+
+    def __init__(self, stream_conn: StreamConnection) -> None:
+        self._stream_conn = stream_conn
+
+        # Audio RTP state (independent from video)
+        self._sequence: int = 0
+        self._timestamp: int = 0
+
+        # Transport encryptor
+        self._encryptor: Optional[TransportEncryptor] = None
+
+        # Stream server endpoint
+        self._target_ip: str = ''
+        self._target_port: int = 0
+
+        # Counters for RTCP
+        self._packet_count: int = 0
+        self._octet_count: int = 0
+
+        # Running state
+        self._active: bool = False
+
+        # Send callback: callable(packet, ip, port)
+        self._send_callback = None
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def start(self) -> None:
+        """Initialize the audio sender with stream connection parameters."""
+        audio_ssrc = self._stream_conn.audio_ssrc
+        if audio_ssrc == 0:
+            raise RuntimeError('Stream connection not ready (no audio SSRC)')
+
+        secret_key = self._stream_conn.secret_key
+        if secret_key is None or len(secret_key) == 0:
+            raise RuntimeError('Stream connection not ready (no secret key)')
+
+        mode = self._stream_conn.encryption_mode
+        if mode is None:
+            raise RuntimeError('Stream connection not ready (no encryption mode)')
+
+        ready = self._stream_conn.ready_params
+        if ready is None:
+            raise RuntimeError('Stream connection not ready (no READY params)')
+        self._target_ip = ready.ip
+        self._target_port = ready.port
+
+        self._encryptor = TransportEncryptor(secret_key, mode)
+
+        self._sequence = 0
+        self._timestamp = 0
+        self._packet_count = 0
+        self._octet_count = 0
+        self._active = True
+
+        log.info(
+            'AudioSender started: ssrc=%s mode=%s target=%s:%s',
+            audio_ssrc, mode, self._target_ip, self._target_port,
+        )
+
+    def stop(self) -> None:
+        """Stop the audio sender."""
+        self._active = False
+        log.info('AudioSender stopped')
+
+    def send_frame(self, frame: bytes, pts_ms: float, frametime_ms: float) -> int:
+        """Send a single Opus audio frame.
+
+        Parameters
+        ----------
+        frame : bytes
+            Raw Opus frame data.
+        pts_ms : float
+            Presentation timestamp in milliseconds.
+        frametime_ms : float
+            Frame duration in milliseconds.
+
+        Returns
+        -------
+        int
+            Number of RTP packets sent (always 1 for Opus).
+        """
+        if not self._active:
+            raise RuntimeError('AudioSender not active')
+
+        if self._encryptor is None:
+            raise RuntimeError('AudioSender not started')
+
+        # Step 1: DAVE encrypt
+        frame = self._dave_encrypt(frame)
+
+        # Step 2: Build RTP header (Opus PT 120, 48kHz clock)
+        rtp_timestamp = int(pts_ms * 48) & 0xFFFFFFFF  # 48kHz clock for Opus
+        header = build_rtp_header(
+            sequence=self._next_seq(),
+            timestamp=rtp_timestamp,
+            ssrc=self._stream_conn.audio_ssrc,
+            payload_type=120,  # Opus PT
+            marker=False,
+        )
+
+        # Step 3: Transport encrypt
+        encrypted = self._encryptor.encrypt_rtp(bytes(header), frame)
+        wire_packet = bytes(header) + encrypted
+
+        # Step 4: Send
+        self._send_udp(wire_packet)
+        self._packet_count += 1
+        self._octet_count += len(frame)
+        self._timestamp = rtp_timestamp
+
+        return 1
+
+    def _dave_encrypt(self, frame: bytes) -> bytes:
+        """Encrypt an audio frame using DAVE."""
+        dave_session = self._stream_conn.dave_session
+        if dave_session is None or not self._stream_conn.dave_ready:
+            return frame
+
+        try:
+            encrypted = dave_session.encrypt_opus(frame)
+            return encrypted
+        except Exception as e:
+            log.warning('DAVE audio encrypt failed, using passthrough: %s', e)
+            return frame
+
+    def _send_udp(self, packet: bytes) -> None:
+        """Send a packet over UDP to the stream server's endpoint."""
+        if self._send_callback is None:
+            log.warning('No audio send callback configured')
+            return
+        try:
+            self._send_callback(packet, self._target_ip, self._target_port)
+        except Exception as e:
+            log.warning('Audio UDP send error: %s', e)
+
+    def set_send_callback(self, callback) -> None:
+        """Set the callback for sending UDP packets."""
+        self._send_callback = callback
+
+    def _next_seq(self) -> int:
+        """Get next sequence number, wrapping at 65536."""
+        seq = self._sequence
+        self._sequence = (self._sequence + 1) & 0xFFFF
+        return seq

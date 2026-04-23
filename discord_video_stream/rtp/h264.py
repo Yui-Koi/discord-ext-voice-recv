@@ -57,51 +57,6 @@ def split_nalu(frame: bytes) -> List[bytes]:
     list[bytes]
         List of NAL unit byte strings (without start codes).
     """
-    nalus = []
-    pos = 0
-    length = len(frame)
-
-    while pos < length:
-        # Find next start code
-        # Try 4-byte first, then 3-byte
-        idx3 = frame.find(START_CODE_3, pos)
-
-        if idx3 == -1:
-            # No more start codes, rest is the last NALU (or padding)
-            if pos < length:
-                nalus.append(frame[pos:])
-            break
-
-        # Check if it's actually a 4-byte start code
-        if idx3 > 0 and frame[idx3 - 1] == 0x00:
-            # 4-byte start code: 0x00 00 00 01
-            if pos == 0:
-                # First NALU starts after the 4-byte start code
-                pos = idx3 + 4  # skip the 4-byte start code
-                continue
-            else:
-                # End of previous NALU is idx3-1 (exclusive), start code is 4 bytes
-                nalus.append(frame[pos:idx3 - 1])
-                pos = idx3 + 3  # skip 3 bytes of the 4-byte start code
-                # The 0x01 byte is at idx3 + 2, so pos should skip to idx3 + 3
-                # But we already counted the leading 0x00 as part of previous NALU
-                # Let me redo this more carefully
-                pass
-
-        # Simpler approach: find all start code positions first
-        break
-
-    # Redo with cleaner logic
-    return _split_nalu_impl(frame)
-
-
-def _split_nalu_impl(frame: bytes) -> List[bytes]:
-    """Split Annex-B frame into NALUs using position-based approach.
-
-    Finds start code positions, preferring 4-byte codes. When a 3-byte
-    code is found that is actually part of a 4-byte code (preceded by 0x00),
-    it is skipped in favor of the 4-byte code found at the earlier position.
-    """
     # Find all start code positions (with their lengths)
     # Each entry is (position, code_length)
     codes = []

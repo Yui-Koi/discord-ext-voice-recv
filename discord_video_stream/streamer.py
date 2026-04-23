@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 try:
     from .stream_connection import StreamConnection
-    from .voice_send import VideoSender
+    from .voice_send import VideoSender, AudioSender
     from .media.ffmpeg import StreamOptions, FFmpegProcess
     from .media.demux import Demuxer, FrameType
     from .media.pacer import FramePacer
@@ -48,7 +48,7 @@ try:
     )
 except ImportError:
     from stream_connection import StreamConnection
-    from voice_send import VideoSender
+    from voice_send import VideoSender, AudioSender
     from media.ffmpeg import StreamOptions, FFmpegProcess
     from media.demux import Demuxer, FrameType
     from media.pacer import FramePacer
@@ -99,6 +99,10 @@ class VideoStreamer:
         self._audio_pacer: Optional[FramePacer] = None
         self._send_task: Optional[asyncio.Task] = None
         self._rtcp_task: Optional[asyncio.Task] = None
+
+        # Senders
+        self._video_sender: Optional[VideoSender] = None
+        self._audio_sender: Optional[AudioSender] = None
 
         # Gateway event listeners
         self._stream_create_event: Optional[asyncio.Event] = None
@@ -380,16 +384,11 @@ class VideoStreamer:
         # Connect to stream voice server
         await self._stream_conn.connect()
 
-        # Send VIDEO opcode to enable video
-        self._stream_conn.set_video_attributes(
-            enabled=True,
-            attrs=VideoAttributes(width=1920, height=1080, fps=30),
-        )
-
         # Send SPEAKING opcode (mode=2 for Go Live)
         self._stream_conn.set_speaking(True)
 
-        log.info('Go Live stream started')
+        # VIDEO attributes are sent when play() is called with actual resolution
+        log.info('Go Live stream started, ready for media')
 
     async def play(
         self,
@@ -433,17 +432,30 @@ class VideoStreamer:
         # Create demuxer
         self._demuxer = Demuxer(format='nut')
 
+        # Determine actual video dimensions
+        vid_width = options.width if options.width > 0 else 1280
+        vid_height = options.height if options.height > 0 else 720
+        vid_fps = options.frame_rate or 30
+
+        # Send VIDEO opcode with actual stream attributes
+        self._stream_conn.set_video_attributes(
+            enabled=True,
+            attrs=VideoAttributes(width=vid_width, height=vid_height, fps=vid_fps),
+        )
+
         # Create video sender
         self._video_sender = VideoSender(self._stream_conn)
         self._video_sender.configure(
-            width=options.width if options.width > 0 else 1280,
-            height=options.height if options.height > 0 else 720,
-            fps=options.frame_rate or 30,
+            width=vid_width,
+            height=vid_height,
+            fps=vid_fps,
         )
 
-        # Set up UDP send callback — sends to the STREAM server's
+        # Create audio sender
+        self._audio_sender = AudioSender(self._stream_conn)
+
+        # Set up UDP send callback -- sends to the STREAM server's
         # endpoint, NOT the main voice connection's endpoint.
-        # This is the critical fix for error 2012.
         def send_udp(packet: bytes, ip: str, port: int) -> None:
             if self._voice_client is not None and hasattr(self._voice_client, '_connection'):
                 conn = self._voice_client._connection
@@ -454,7 +466,11 @@ class VideoStreamer:
                         log.warning('UDP send error: %s', e)
 
         self._video_sender.set_send_callback(send_udp)
+        self._audio_sender.set_send_callback(send_udp)
+
+        # Start both senders (reads SSRCs, keys, endpoint from stream conn)
         self._video_sender.start()
+        self._audio_sender.start()
 
         # Create pacers
         self._video_pacer = FramePacer(clock_rate=90000)
@@ -476,39 +492,64 @@ class VideoStreamer:
         log.info('Streaming started')
 
     async def _send_loop(self, pipe) -> None:
-        """Main loop: demux frames, pace, packetize, encrypt, send."""
+        """Main loop: demux frames, pace, packetize, encrypt, send.
+
+        Both video and audio frames are sent through the stream
+        connection's RTP path with packet-level pacing at 25 Mbps
+        to prevent burst-induced packet loss.
+        """
         if self._demuxer is None or self._video_sender is None:
+            return
+        if self._audio_sender is None:
             return
         if self._video_pacer is None or self._audio_pacer is None:
             return
 
+        # Packet pacing: 25 Mbps = 3,125,000 bytes/sec
+        # Sleep time per byte = 1 / 3_125_000 seconds
+        PACING_BYTES_PER_SEC = 25_000_000 // 8
+
         try:
             async for frame in self._demuxer.demux(pipe):
                 if frame.frame_type == FrameType.VIDEO:
-                    # Pace video frame
+                    # Pace video frame timing
                     await self._video_pacer.pace(
                         frame.pts_ms,
                         frame.frametime_ms,
                     )
 
-                    # Send video frame
-                    self._video_sender.send_frame(
+                    # Send video frame (returns list of RTP packets)
+                    pkt_count = self._video_sender.send_frame(
                         frame.data,
                         frame.pts_ms,
                         frame.frametime_ms,
                     )
 
-                    # Update audio pacer with current video PTS
-                    # (for sync reference)
+                    # Packet-level pacing: sleep proportional to data sent
+                    # to prevent burst packet loss on keyframes
+                    if pkt_count > 1:
+                        # Estimate total wire bytes: ~1300 per packet
+                        pacing_sleep = (pkt_count * 1300) / PACING_BYTES_PER_SEC
+                        await asyncio.sleep(pacing_sleep)
+
+                    # Update audio pacer with current video PTS (for sync)
                     self._audio_pacer.update_pts(frame.pts_ms)
 
                 elif frame.frame_type == FrameType.AUDIO:
-                    # Audio is handled by discord.py's existing send path
-                    # We just need to pace it for sync reference
+                    # Pace audio frame timing for sync reference
                     await self._audio_pacer.pace(
                         frame.pts_ms,
                         frame.frametime_ms,
                     )
+
+                    # Send audio frame through stream connection
+                    self._audio_sender.send_frame(
+                        frame.data,
+                        frame.pts_ms,
+                        frame.frametime_ms,
+                    )
+
+                    # Update video pacer with current audio PTS (for sync)
                     self._video_pacer.update_pts(frame.pts_ms)
 
         except asyncio.CancelledError:
@@ -551,7 +592,12 @@ class VideoStreamer:
             self._video_sender.stop()
             self._video_sender = None
 
-        # Stop FFmpeg
+        # Stop audio sender
+        if self._audio_sender is not None:
+            self._audio_sender.stop()
+            self._audio_sender = None
+
+        # Stop FFmpeg (await properly, not fire-and-forget)
         if self._ffmpeg is not None:
             asyncio.ensure_future(self._ffmpeg.stop())
             self._ffmpeg = None

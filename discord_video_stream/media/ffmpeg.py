@@ -76,6 +76,11 @@ class StreamOptions:
 class FFmpegProcess:
     """Manages an FFmpeg subprocess that outputs NUT format to stdout.
 
+    A background task continuously drains stderr to prevent pipe buffer
+    overflow that would deadlock FFmpeg. Stderr output is logged at
+    debug level. Use read_stderr() to get the full output after the
+    process ends.
+
     Usage:
         opts = StreamOptions(url='input.mp4', bitrate_video=5000)
         ffmpeg = FFmpegProcess(opts)
@@ -88,6 +93,8 @@ class FFmpegProcess:
         self._options = options
         self._process: Optional[asyncio.subprocess.Process] = None
         self._cmd = self._build_command(options)
+        self._stderr_drain_task: Optional[asyncio.Task] = None
+        self._stderr_buffer: List[bytes] = []
 
     @property
     def command(self) -> List[str]:
@@ -114,7 +121,7 @@ class FFmpegProcess:
         return None
 
     def _build_command(self, opts: StreamOptions) -> List[str]:
-        cmd = ['ffmpeg', '-y', '-loglevel', 'verbose', '-nostats']
+        cmd = ['ffmpeg', '-y', '-loglevel', 'warning', '-nostats']
 
         # Input options
         if opts.hwaccel:
@@ -169,7 +176,7 @@ class FFmpegProcess:
         """Start the FFmpeg subprocess.
 
         Returns the process with stdout available for reading NUT data.
-        stderr is also available for reading FFmpeg log output.
+        A background task drains stderr to prevent pipe buffer overflow.
         """
         log.debug('Starting FFmpeg: %s', ' '.join(self._cmd))
 
@@ -179,13 +186,54 @@ class FFmpegProcess:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        # Start background stderr drain to prevent pipe buffer overflow
+        self._stderr_buffer = []
+        self._stderr_drain_task = asyncio.create_task(
+            self._drain_stderr(),
+            name='ffmpeg-stderr-drain',
+        )
+
         log.debug('FFmpeg started, pid=%d', self._process.pid)
         return self._process
+
+    async def _drain_stderr(self) -> None:
+        """Continuously read stderr to prevent pipe buffer overflow.
+
+        FFmpeg writes diagnostic output to stderr. If the OS pipe buffer
+        (typically 64KB) fills up, FFmpeg blocks on stderr writes, which
+        blocks stdout writes, which deadlocks the entire pipeline.
+        """
+        if self._process is None or self._process.stderr is None:
+            return
+        try:
+            while True:
+                data = await self._process.stderr.read(4096)
+                if not data:
+                    break
+                self._stderr_buffer.append(data)
+                # Log at debug level so it's available if needed
+                for line in data.decode('utf-8', errors='replace').splitlines():
+                    line = line.strip()
+                    if line:
+                        log.debug('ffmpeg: %s', line)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.debug('stderr drain error: %s', e)
 
     async def stop(self) -> None:
         """Stop FFmpeg gracefully, waiting for it to finish."""
         if self._process is None:
             return
+
+        # Cancel stderr drain task
+        if self._stderr_drain_task is not None:
+            self._stderr_drain_task.cancel()
+            try:
+                await self._stderr_drain_task
+            except asyncio.CancelledError:
+                pass
+            self._stderr_drain_task = None
 
         if self._process.returncode is None:
             log.debug('Terminating FFmpeg pid=%d', self._process.pid)
@@ -207,8 +255,9 @@ class FFmpegProcess:
         return -1
 
     async def read_stderr(self) -> str:
-        """Read all stderr output (FFmpeg logs). Blocks until process ends."""
-        if self._process and self._process.stderr:
-            data = await self._process.stderr.read()
-            return data.decode('utf-8', errors='replace')
-        return ''
+        """Return all stderr output collected by the drain task.
+
+        Returns the buffered stderr output. Call after stop() for
+        complete output.
+        """
+        return b''.join(self._stderr_buffer).decode('utf-8', errors='replace')
