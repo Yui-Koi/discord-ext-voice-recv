@@ -128,7 +128,15 @@ class FFmpegProcess:
             cmd += ['-hwaccel', 'auto']
 
         cmd += opts.custom_input_options
-        cmd += ['-i', opts.url]
+
+        # Handle lavfi: prefix (virtual input device)
+        # FFmpeg requires `-f lavfi -i <filter>` format, not `lavfi:<filter>`
+        input_url = opts.url
+        if input_url.startswith('lavfi:'):
+            cmd += ['-f', 'lavfi']
+            input_url = input_url[6:]  # strip 'lavfi:' prefix
+
+        cmd += ['-i', input_url]
 
         # Video encoding
         cmd += ['-map', '0:v']

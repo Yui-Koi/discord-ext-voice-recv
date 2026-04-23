@@ -131,3 +131,6 @@ dmypy.json
 .vscode/
 *.code-*
 test_media/
+test_bot.py
+test_bot_token.txt
+*.env

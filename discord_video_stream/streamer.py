@@ -138,6 +138,11 @@ class VideoStreamer:
         discord.py natively, so we listen via the socket_raw_receive
         dispatch.
 
+        IMPORTANT: dpy-self only dispatches socket_raw_receive when
+        _enable_debug_events is True. We patch the gateway WebSocket's
+        log_receive method to always dispatch, ensuring our hooks work
+        regardless of debug settings.
+
         Chains onto any existing on_socket_raw_receive handler to
         avoid overriding it.
         """
@@ -175,6 +180,41 @@ class VideoStreamer:
             await _on_socket_raw_receive(data)
 
         self._client.on_socket_raw_receive = _chained_handler
+
+    def _ensure_gateway_dispatch(self) -> None:
+        """Ensure the gateway WebSocket dispatches socket_raw_receive.
+
+        dpy-self only dispatches socket_raw_receive when
+        _enable_debug_events is True (gateway.py: ws.log_receive =
+        ws.debug_log_receive). This method patches the gateway WS to
+        always dispatch, so our STREAM_CREATE/STREAM_SERVER_UPDATE
+        hooks work in production.
+
+        Call this after the client has connected to the gateway (e.g.,
+        in join_voice after channel.connect()).
+        """
+        try:
+            ws = self._client.ws
+            if ws is None:
+                log.warning('Cannot patch gateway WS: ws is None')
+                return
+
+            # Check if already patched (debug_log_receive dispatches socket_raw_receive)
+            if hasattr(ws, '_dispatch'):
+                original_log_receive = ws.log_receive
+
+                def _always_dispatch_receive(data):
+                    """Always dispatch socket_raw_receive, regardless of debug flag."""
+                    ws._dispatch('socket_raw_receive', data)
+
+                # Only patch if not already dispatching
+                if original_log_receive != ws.debug_log_receive:
+                    ws.log_receive = _always_dispatch_receive
+                    log.debug('Patched gateway WS to always dispatch socket_raw_receive')
+                else:
+                    log.debug('Gateway WS already dispatching socket_raw_receive (debug mode)')
+        except Exception as e:
+            log.warning('Failed to patch gateway WS: %s', e)
 
     async def _on_stream_create(self, data: Dict[str, Any]) -> None:
         """Handle STREAM_CREATE gateway event.
@@ -315,6 +355,9 @@ class VideoStreamer:
         # Connect to voice
         self._voice_client = await channel.connect()
         log.info('Joined voice channel %s in guild %s', channel_id, guild_id)
+
+        # Ensure gateway dispatches socket_raw_receive for our hooks
+        self._ensure_gateway_dispatch()
 
         # Wait for session_id
         try:

@@ -567,3 +567,47 @@ The FFmpeg process is terminated fire-and-forget. If `stop()` is called and then
 - `_close_pipe()` explicitly closes both the file object and the dup_fd
 - Called in `finally` block of `demux()` method
 - Called in `probe()` method's `finally` block
+
+---
+
+## Runtime Bugs (2026-04-23, live testing)
+
+### RT-BUG-01 (CRITICAL): Gateway hook requires _enable_debug_events
+
+**File:** `streamer.py`, `_setup_gateway_listener()`
+
+The `socket_raw_receive` event is only dispatched by dpy-self when `_enable_debug_events` is True (gateway.py line 405: `ws.log_receive = ws.debug_log_receive`). Without this flag, the event never fires, and STREAM_CREATE/STREAM_SERVER_UPDATE/VOICE_STATE_UPDATE are never caught.
+
+**Impact:** The entire gateway hooking mechanism is non-functional in production. join_voice() times out waiting for session_id. start_go_live() times out waiting for STREAM_CREATE.
+
+**Root cause:** The `_setup_gateway_listener` relies on `socket_raw_receive` dispatch, which is a debug-only feature in dpy-self.
+
+**Fix needed:** Patch the gateway WebSocket's `log_receive` method after connection to always dispatch `socket_raw_receive`, or use a different interception mechanism (e.g., monkey-patching the WS message handler directly).
+
+### RT-BUG-02 (HIGH): FFmpeg lavfi input format
+
+**File:** `media/ffmpeg.py`, `_build_command()`
+
+FFmpeg rejects `lavfi:color=...` as input URL format. The correct format is `-f lavfi -i color=...`. The StreamOptions class has `custom_input_options` for pre-input flags but the test bot passed `lavfi:...` as the URL directly.
+
+**Impact:** FFmpeg fails with exit code 8, producing no output. The demuxer then crashes with AVERROR_INVALIDDATA.
+
+**Fix needed:** Either document that lavfi inputs require `custom_input_options=['-f', 'lavfi']` and `url='color=...'`, or detect the `lavfi:` prefix and split it automatically.
+
+### RT-BUG-03 (MEDIUM): Secret key timing race
+
+**File:** `streamer.py`, `start_go_live()`
+
+The SESSION_DESCRIPTION (containing secret_key and encryption_mode) arrives ~7ms after `start_go_live()` returns. If `play()` is called immediately, the VideoSender.start() could race against the async SESSION_DESCRIPTION handler.
+
+**Impact:** In practice, the 3-second sleep in the test bot avoided this. But callers who chain start_go_live() and play() without a delay could hit this.
+
+**Fix needed:** Either wait for SESSION_DESCRIPTION in start_go_live(), or defer VideoSender.start() until play() checks for readiness with a short wait.
+
+### RT-BUG-04 (LOW): Unhandled opcode 15
+
+**File:** `stream_connection.py`, `_handle_json_message()`
+
+The stream WS receives opcode 15 (MEDIA_SINK_WANTS / pixelCounts). Not handled, logged as unhandled.
+
+**Impact:** None (informational only).
