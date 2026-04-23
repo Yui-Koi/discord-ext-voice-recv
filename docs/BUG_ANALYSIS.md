@@ -442,16 +442,16 @@ The FFmpeg process is terminated fire-and-forget. If `stop()` is called and then
 | BUG-03 | CRITICAL | media/demux.py | Demuxer blocks asyncio event loop | FIXED |
 | BUG-04 | CRITICAL | compat/voice_recv.py | Video sent to wrong endpoint | FIXED |
 | BUG-05 | HIGH | media/ffmpeg.py | stderr never drained, deadlock risk | FIXED |
-| BUG-06 | HIGH | stream_connection.py | No reconnection on disconnect | OPEN |
-| BUG-07 | HIGH | stream_connection.py | Critical WS sends are fire-and-forget | OPEN |
+| BUG-06 | HIGH | stream_connection.py | No reconnection on disconnect | FIXED |
+| BUG-07 | HIGH | stream_connection.py | Critical WS sends are fire-and-forget | FIXED |
 | BUG-08 | -- | voice_send.py | ~~RTCP NTP timestamp~~ (retracted, correct) | N/A |
 | BUG-09 | LOW | voice_send.py | Duplicate sequence/timestamp state | OPEN |
 | BUG-10 | LOW | rtp/h264.py | Dead code in split_nalu() | FIXED |
 | BUG-11 | LOW | all files | try/except ImportError fallback pattern | OPEN |
-| BUG-12 | MEDIUM | media/pacer.py | Busy-wait polling for sync | OPEN |
+| BUG-12 | MEDIUM | media/pacer.py | Busy-wait polling for sync | FIXED |
 | BUG-13 | MEDIUM | media/demux.py | File descriptor leak in _wrap_pipe | FIXED |
-| BUG-14 | LOW | stream_connection.py | identify() is sync, sends fire-and-forget | OPEN |
-| BUG-15 | LOW | stream_connection.py | _ready_event created inside connect() | OPEN |
+| BUG-14 | LOW | stream_connection.py | identify() is sync, sends fire-and-forget | FIXED |
+| BUG-15 | LOW | stream_connection.py | _ready_event created inside connect() | FIXED |
 | BUG-16 | MEDIUM | streamer.py | VIDEO attributes hardcoded, not from options | FIXED |
 | BUG-17 | MEDIUM | streamer.py | FFmpeg stop is fire-and-forget | OPEN |
 
