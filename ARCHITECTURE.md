@@ -4,6 +4,60 @@ Technical architecture documentation for discord-ext-voice-recv, covering the vo
 
 ---
 
+## 0. Reference Implementation
+
+The video stream subsystem (`discord_video_stream`) is a Python port of `@dank074/discord-video-stream` (Node.js, v6.0.0). The Node.js reference uses WebRTC (via `node-datachannel`) for media transport, while the Python port uses raw UDP with manual RTP packetization. This section documents the mapping between the two implementations and the key architectural differences.
+
+### 0.1 Node.js Source to Python Module Mapping
+
+Node.js source file to Python module:
+
+- `src/client/voice/CodecPayloadType.ts` to `discord_video_stream/protocol/types.py` -- Codec configurations, payload types. Values are identical.
+- `src/client/voice/VoiceOpCodes.ts` to `discord_video_stream/stream_connection.py` (VoiceOpCodes class) -- Voice WebSocket opcodes. All opcodes 0-31 match.
+- `src/client/voice/StreamConnection.ts` to `discord_video_stream/stream_connection.py` -- Go Live stream connection. `daveChannelId = BigInt(serverId) - 1n`, speaking mode = 2. Both match.
+- `src/client/voice/BaseMediaConnection.ts` to `discord_video_stream/stream_connection.py` -- Full voice WebSocket lifecycle (IDENTIFY, READY, SELECT_PROTOCOL, SESSION_DESCRIPTION, DAVE opcodes, heartbeat, binary messages). All protocol logic matches.
+- `src/client/voice/WebRtcWrapper.ts` to `discord_video_stream/voice_send.py` -- Media sending. Node.js uses WebRTC packetizers from `node-datachannel`; Python implements H.264 packetization and transport encryption manually.
+- `src/client/Streamer.ts` to `discord_video_stream/streamer.py` -- Main API (joinVoice, createStream, playStream, stopStream, leaveVoice). Gateway event hooking for STREAM_CREATE/STREAM_SERVER_UPDATE matches.
+- `src/media/BaseMediaStream.ts` to `discord_video_stream/media/pacer.py` -- Frame pacing algorithm. Timing formula (`sleep = pts - startPts + frametime - elapsed`) is identical. Sync tolerance of 20ms matches.
+- `src/media/VideoStream.ts` / `AudioStream.ts` to `discord_video_stream/voice_send.py` (VideoSender.send_frame / AudioSender.send_frame) -- Frame sending. Both call DAVE encrypt then packetize then send.
+- `src/client/processing/SPSVUIRewriter.ts` to `discord_video_stream/protocol/vui.py` -- SPS VUI rewriter. Logic is identical: force bitstream_restriction, max_num_reorder_frames=0, strip video_signal_type.
+- `src/client/processing/AnnexBBitstreamReaderWriter.ts` to `discord_video_stream/protocol/vui.py` (BitstreamReader / BitstreamWriter) -- Exp-Golomb bitstream reader/writer with emulation prevention. Logic matches.
+- `src/client/processing/AnnexBHelper.ts` to `discord_video_stream/rtp/h264.py` (split_nalu / get_nalu_type) -- NALU splitting and type extraction. Functionality matches.
+- `src/media/LibavDemuxer.ts` to `discord_video_stream/media/demux.py` -- Frame extraction from container. Node.js uses `node-av`; Python uses PyAV. Both read NUT format, both parse Opus TOC bytes for duration.
+- `src/utils.ts` to `discord_video_stream/protocol/types.py` (generate_stream_key / parse_stream_key) -- Stream key format. Both generate `guild:{guild_id}:{channel_id}:{user_id}`.
+
+### 0.2 Key Architectural Differences
+
+**Transport layer**: Node.js uses WebRTC via `node-datachannel` (PeerConnection, RTP tracks, ICE). Python uses raw UDP via discord.py's VoiceClient socket. The Python implementation manually builds RTP headers, performs H.264 NALU fragmentation (FU-A), and does AEAD transport encryption. The Node.js `node-datachannel` library handles all of this internally via `H264RtpPacketizer`, `RtpPacketizer`, and `PacingHandler`.
+
+**Packet-level pacing**: Node.js adds `PacingHandler(25_000_000, 1)` to the packetizer chain, which paces individual RTP packets at 25 Mbps with burst size 1. Python implements equivalent pacing in the send loop by sleeping proportional to the number of packets sent times 1300 bytes divided by 25 Mbps.
+
+**RTCP handling**: Node.js adds `RtcpSrReporter` and `RtcpNackResponder` to the packetizer chain. Python implements RTCP Sender Reports manually via `VideoSender.send_rtcp_sender_report()` sent periodically (every 5 seconds). RTCP NACK handling is not implemented (not needed for send-only Go Live).
+
+**Demuxing**: Node.js uses `node-av` (a Node.js binding to FFmpeg's libav) with bitstream filter chains (`h264_mp4toannexb`, `h264_metadata aud:remove`, `dump_extra` for H.264 input). Python uses PyAV with raw NUT container parsing. The bitstream filters are not needed in Python because FFmpeg's `-f nut` output already provides Annex-B format H.264.
+
+**Voice WebSocket version**: Node.js connects to `wss://{endpoint}/?v=8`. Python uses `v=9` (which adds `channel_id` to IDENTIFY). Both work; v9 is the current recommended version per Discord documentation.
+
+**Volume control**: Node.js uses FFmpeg's `azmq` audio filter with ZeroMQ for real-time volume control. Python does not implement this feature.
+
+**DAVE session**: Node.js uses `@snazzah/davey` (JavaScript bindings). Python uses `davey` (Python bindings via maturin). Both expose the same API: `encrypt(media_type, codec, packet)`, `encrypt_opus(packet)`, `process_proposals()`, `process_welcome()`, `process_commit()`, `set_external_sender()`, `get_serialized_key_package()`.
+
+### 0.3 Verified Protocol Constants
+
+All protocol constants match between Node.js reference and Python implementation:
+
+- Codec payload types: Opus PT=120/48kHz, H264 PT=101/RTX=102/90kHz, H265 PT=103/RTX=104, VP8 PT=105/RTX=106, VP9 PT=107/RTX=108, AV1 PT=109/RTX=110
+- Gateway opcodes: STREAM_CREATE=18, STREAM_DELETE=19, STREAM_SET_PAUSED=22
+- Voice opcodes: IDENTIFY=0 through PLATFORM=20, DAVE opcodes 21-31, binary opcodes 25-30
+- Stream key format: `guild:{guild_id}:{channel_id}:{user_id}` or `call:{channel_id}:{user_id}`
+- daveChannelId for streams: `BigInt(serverId) - 1n`
+- Speaking mode for Go Live: 2 (priority/soundshare)
+- Simulcast streams: `[{type: "screen", rid: "100", quality: 100}]`
+- Encryption modes: `aead_aes256_gcm_rtpsize` (preferred), `aead_xchacha20_poly1305_rtpsize` (required)
+- SPS VUI changes: force bitstream_restriction=1, max_num_reorder_frames=0, max_dec_frame_buffering=max_num_ref_frames
+
+---
+
 ## 1. Voice Receive Subsystem
 
 ### 1.1 Overview
